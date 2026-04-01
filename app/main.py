@@ -31,6 +31,25 @@ app.add_middleware(
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Automatically recreate admin user in case the database was wiped
+def init_admin():
+    db = database.SessionLocal()
+    try:
+        if not db.query(models.User).filter(models.User.email == "admin@securitigpt.com").first():
+            admin_user = models.User(
+                email="admin@securitigpt.com",
+                password_hash=pwd_context.hash("admin123"),
+                credits=999999
+            )
+            db.add(admin_user)
+            db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+init_admin()
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 # --- MASTER PROMPT ---
