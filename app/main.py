@@ -24,11 +24,12 @@ app.add_middleware(
         "http://localhost:5500",  # For local testing
         "http://127.0.0.1:5500"   # For local testing
     ],
-    allow_origin_regex="https://.*",
+    allow_origin_regex="https://.*",  # <--- Ye line add ki hai
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
