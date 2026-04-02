@@ -415,8 +415,10 @@ async def email_check(req: ToolRequest, user: models.User = Depends(require_cred
                 return {"success": True, "message": "Email Analyzed", "data": {"breaches": breaches}}
             elif response.status_code == 404:
                 return {"success": True, "message": "No breaches found", "data": {"breaches": []}}
+            elif response.status_code == 429:
+                return {"success": False, "message": "Rate limit reached. Please wait a moment or upgrade your RapidAPI plan."}
             else:
-                return {"success": False, "message": f"API Error: {response.status_code}"}
+                return {"success": False, "message": f"API Error: {response.status_code} - Please check your RapidAPI subscription."}
     except Exception as e:
         return {"success": False, "message": f"Connection error: {str(e)}"}
 
