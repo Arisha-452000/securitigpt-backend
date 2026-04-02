@@ -269,6 +269,33 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
         traceback.print_exc()
         return {"success": False, "message": f"Global Error: {str(e)} - {type(e).__name__}"}
 
+async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers: dict, max_attempts: int = 15, delay: int = 4):
+    """Wait for a VirusTotal analysis to complete with a robust polling loop."""
+    stats = {}
+    results = {}
+    status = "queued"
+    
+    for attempt in range(max_attempts):
+        await asyncio.sleep(delay)
+        try:
+            res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+            if res.status_code == 200:
+                data_attr = res.json().get("data", {}).get("attributes", {})
+                status = data_attr.get("status")
+                stats = data_attr.get("stats", {})
+                results = data_attr.get("results", {})
+                
+                # Exit polling as soon as it's completed
+                if status == "completed":
+                    break
+            else:
+                # If analysis fetch fails temporarily, keep trying until timeout
+                continue
+        except Exception:
+            continue
+            
+    return stats, results, status
+
 @app.post("/tools/phishing-check")
 async def phishing_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
     if not req.url: return {"success": False, "message": "URL required"}
@@ -290,27 +317,8 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Step 2: Poll for completion (up to 30 seconds total)
-            stats = {}
-            results = {}
-            status = "queued"
-            
-            for attempt in range(10):  # 10 attempts * 3s = 30s max
-                await asyncio.sleep(3)
-                result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
-                
-                if result_res.status_code == 200:
-                    data_attr = result_res.json().get("data", {}).get("attributes", {})
-                    status = data_attr.get("status")
-                    stats = data_attr.get("stats", {})
-                    results = data_attr.get("results", {})
-                    
-                    # Exit polling as soon as it's completed
-                    if status == "completed":
-                        break
-                else:
-                    # If analysis fetch fails temporarily, keep trying until timeout
-                    continue
+            # Step 2: Poll for completion (robust longer wait)
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers)
             
             return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
     except Exception as e:
@@ -427,24 +435,8 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
             if not analysis_id:
                 return {"success": False, "message": "Failed to retrieve analysis ID from VirusTotal."}
             
-            # Step 2: Poll for results (max 30s)
-            stats = {}
-            results = {}
-            status = "queued"
-            
-            for attempt in range(10):  # 10 attempts * 3s = 30s max
-                await asyncio.sleep(3)
-                result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
-                
-                if result_res.status_code == 200:
-                    data_attr = result_res.json().get("data", {}).get("attributes", {})
-                    status = data_attr.get("status")
-                    stats = data_attr.get("stats", {})
-                    results = data_attr.get("results", {})
-                    
-                    if status == "completed":
-                        break
-                else: continue
+            # Step 2: Poll for results (robust longer wait)
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers)
             
             return {"success": True, "message": "File Analyzed", "data": {"stats": stats, "results": results, "status": status}}
 
