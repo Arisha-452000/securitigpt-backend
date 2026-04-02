@@ -7,6 +7,8 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import httpx
+import asyncio
+import base64
 from openai import AsyncOpenAI
 
 from . import models, database, config
@@ -193,6 +195,7 @@ class ChatRequest(BaseModel):
 class ToolRequest(BaseModel):
     url: Optional[str] = None
     email: Optional[str] = None
+    input: Optional[str] = None
 
 # --- DEPENDENCIES ---
 def verify_password(plain_password, hashed_password):
@@ -336,15 +339,64 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
     try:
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            res = await client.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": req.url})
-            if res.status_code == 200:
-                stats = res.json().get("data", {}).get("attributes", {}).get("stats", {})
-                malicious = stats.get("malicious", 0)
-                suspicious = stats.get("suspicious", 0)
-                return {"success": True, "message": "URL Analyzed", "data": {"malicious": malicious, "suspicious": suspicious}}
-            return {"success": True, "message": "VT Processing Scheduled", "data": {"malicious": 1, "suspicious": 1}}
+            
+            # Step 1: Submit URL for scanning
+            submit_res = await client.post(
+                "https://www.virustotal.com/api/v3/urls", 
+                headers=headers, 
+                data={"url": req.url}
+            )
+            
+            if submit_res.status_code != 200:
+                # If submission fails, try getting the report directly (maybe it already exists)
+                url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
+                direct_res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
+                if direct_res.status_code == 200:
+                    stats = direct_res.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+                    return {"success": True, "message": "Cached Results found", "data": stats}
+                return {"success": False, "message": f"VT Error: {submit_res.status_code}"}
+            
+            analysis_id = submit_res.json().get("data", {}).get("id")
+            if not analysis_id:
+                return {"success": False, "message": "Failed to get analysis ID"}
+            
+            # Step 2: Wait for analysis (simulated for simplicity)
+            await asyncio.sleep(10)
+            
+            # Step 3: Get analysis results
+            result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+            
+            if result_res.status_code == 200:
+                stats = result_res.json().get("data", {}).get("attributes", {}).get("stats", {})
+                return {"success": True, "message": "URL Analyzed", "data": stats}
+            
+            return {"success": False, "message": f"Result Fetch Error: {result_res.status_code}"}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": f"Connection error: {str(e)}"}
+
+@app.post("/tools/virus-check")
+async def virus_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
+    # Support for hash scanning (MD5/SHA256) or General Malicious Check
+    input_data = req.input or req.url
+    if not input_data: return {"success": False, "message": "Input hash or URL required"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
+            
+            # If it's a 32, 40, or 64 char string, it's likely a hash
+            if len(input_data) in [32, 40, 64]:
+                res = await client.get(f"https://www.virustotal.com/api/v3/files/{input_data}", headers=headers)
+                if res.status_code == 200:
+                    stats = res.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+                    return {"success": True, "message": "Hash Scanned", "data": stats}
+                return {"success": False, "message": f"Hash not found in VT database (Status: {res.status_code})"}
+            
+            # Otherwise, treat as URL scanning (same as phishing-check for unified tool)
+            return await phishing_check(req, user)
+            
+    except Exception as e:
+        return {"success": False, "message": f"Virus scan error: {str(e)}"}
 
 @app.post("/tools/email-check")
 async def email_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
