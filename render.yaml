@@ -21,5 +21,7 @@ services:
         sync: false  # You'll need to set this manually in Render dashboard
       - key: HIBP_API_KEY
         value: mock_key
+      - key: RAPID_API_KEY
+        sync: false  # Set this in the Render dashboard
     healthCheckPath: /health
     autoDeploy: true
