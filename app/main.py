@@ -124,6 +124,7 @@ Make the user feel they are talking to a highly knowledgeable cybersecurity expe
 class AuthRequest(BaseModel):
     email: str
     password: str
+    full_name: Optional[str] = None
 
 class ChatRequest(BaseModel):
     message: str
@@ -176,7 +177,12 @@ def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     if db.query(models.User).filter(models.User.email == req.email).first():
         return {"success": False, "message": "Email already registered"}
     
-    user = models.User(email=req.email, password_hash=get_password_hash(req.password), credits=100)
+    user = models.User(
+        email=req.email, 
+        password_hash=get_password_hash(req.password), 
+        full_name=req.full_name,
+        credits=100
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -197,7 +203,15 @@ def login(req: AuthRequest, db: Session = Depends(database.get_db)):
 def profile(user: models.User = Depends(get_current_user)):
     if not user:
         return {"success": False, "message": "Not authenticated"}
-    return {"success": True, "message": "Profile retrieved", "data": {"email": user.email, "credits": user.credits}}
+    return {
+        "success": True, 
+        "message": "Profile retrieved", 
+        "data": {
+            "email": user.email, 
+            "full_name": user.full_name,
+            "credits": user.credits
+        }
+    }
 
 @app.post("/chat/")
 async def chat(req: ChatRequest, request: Request, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
