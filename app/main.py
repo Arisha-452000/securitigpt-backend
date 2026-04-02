@@ -349,7 +349,24 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
 @app.post("/tools/email-check")
 async def email_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
     if not req.email: return {"success": False, "message": "Email required"}
-    return {"success": True, "message": "Email Analyzed", "data": {"breaches": ["Adobe", "LinkedIn", "Canva"]}}
+    try:
+        url = f"https://emailbreachcheck.p.rapidapi.com/breaches/email/{req.email}"
+        headers = {
+            "x-rapidapi-host": "emailbreachcheck.p.rapidapi.com",
+            "x-rapidapi-key": config.RAPID_API_KEY,
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                breaches = response.json()
+                return {"success": True, "message": "Email Analyzed", "data": {"breaches": breaches}}
+            elif response.status_code == 404:
+                return {"success": True, "message": "No breaches found", "data": {"breaches": []}}
+            else:
+                return {"success": False, "message": f"API Error: {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": f"Connection error: {str(e)}"}
 
 class AdminCreditRequest(BaseModel):
     email: str
