@@ -19,14 +19,10 @@ else:
         # Convert postgres:// to postgresql:// for SQLAlchemy
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     
-    # Create engine with connection pooling for PostgreSQL
+    # Create engine without connection pooling for PostgreSQL (NullPool for Render stability)
     engine = create_engine(
         db_url,
-        pool_size=5,
-        max_overflow=10,
-        pool_timeout=30,
-        pool_recycle=300,
-        pool_pre_ping=True,
+        poolclass=NullPool,
         echo=False
     )
 
