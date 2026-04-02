@@ -318,51 +318,39 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
 
 @app.post("/tools/virus-check")
 async def virus_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
-    # Support for hash scanning (MD5/SHA256) or General Malicious Check
+    """Scan file hashes or URLs using the VirusTotal API with real-time polling."""
+    # Input can be a URL or a file hash
     input_data = req.input or req.url
-    if not input_data: return {"success": False, "message": "Input hash or URL required"}
+    if not input_data: return {"success": False, "message": "File hash or URL required"}
     
     try:
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
-            # If it's a 32, 40, or 64 char string, it's likely a hash
+            # Step 1: Detect if input is a hash (MD5=32, SHA1=40, SHA256=64)
+            data_id = None
+            is_url = True
+            
             if len(input_data) in [32, 40, 64]:
+                # It's a file hash - lookup is instant in VT
                 res = await client.get(f"https://www.virustotal.com/api/v3/files/{input_data}", headers=headers)
                 if res.status_code == 200:
-                    stats = res.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-                    return {"success": True, "message": "Hash Scanned", "data": stats}
-                return {"success": False, "message": f"Hash not found in VT database (Status: {res.status_code})"}
-            
-            # Otherwise, treat as URL scanning (same as phishing-check for unified tool)
-            return await phishing_check(req, user)
-            
+                    data_attr = res.json().get("data", {}).get("attributes", {})
+                    stats = data_attr.get("last_analysis_stats", {})
+                    results = data_attr.get("last_analysis_results", {})
+                    return {"success": True, "message": "File Hash Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
+                else:
+                    return {"success": False, "message": f"Hash not found (Error: {res.status_code})"}
+            else:
+                # It's a URL - trigger a scan and poll
+                return await phishing_check(req, user)
+                
     except Exception as e:
         return {"success": False, "message": f"Virus scan error: {str(e)}"}
 
 @app.post("/tools/email-check")
-async def email_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
-    if not req.email: return {"success": False, "message": "Email required"}
-    try:
-        url = f"https://emailbreachcheck.p.rapidapi.com/breaches/email/{req.email}"
-        headers = {
-            "x-rapidapi-host": "emailbreachcheck.p.rapidapi.com",
-            "x-rapidapi-key": config.RAPID_API_KEY,
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                breaches = response.json()
-                return {"success": True, "message": "Email Analyzed", "data": {"breaches": breaches}}
-            elif response.status_code == 404:
-                return {"success": True, "message": "No breaches found", "data": {"breaches": []}}
-            elif response.status_code == 429:
-                return {"success": False, "message": "Rate limit reached. Please wait a moment or upgrade your RapidAPI plan."}
-            else:
-                return {"success": False, "message": f"API Error: {response.status_code} - Please check your RapidAPI subscription."}
-    except Exception as e:
-        return {"success": False, "message": f"Connection error: {str(e)}"}
+async def email_check(req: ToolRequest, user: models.User = Depends(require_credits(10))):
+    return {"success": False, "message": "Email breach analysis is coming soon in the next update!"}
 
 class AdminCreditRequest(BaseModel):
     email: str
