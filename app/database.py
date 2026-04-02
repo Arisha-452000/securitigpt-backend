@@ -25,7 +25,8 @@ else:
         pool_size=5,
         max_overflow=10,
         pool_timeout=30,
-        pool_recycle=1800,
+        pool_recycle=300,
+        pool_pre_ping=True,
         echo=False
     )
 
