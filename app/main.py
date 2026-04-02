@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -399,17 +399,54 @@ async def get_all_users(admin_user: models.User = Depends(get_current_user), db:
         for user in users
     ]
 
-@app.post("/admin/cap-credits")
-async def cap_all_credits(admin_user: models.User = Depends(get_current_user), db: Session = Depends(database.get_db)):
-    # Cap all users at 100 credits
-    users = db.query(models.User).all()
-    updated_count = 0
-    
-    for user in users:
-        if user.credits > 100:
-            user.credits = 100
-            updated_count += 1
-    
-    db.commit()
-    
-    return {"success": True, "message": f"Capped {updated_count} users at 100 credits"}
+@app.post("/tools/virus-check-file")
+async def virus_check_file(file: UploadFile = File(...), user: models.User = Depends(require_credits(20))):
+    """Securely upload a file to VirusTotal and poll for results in real-time."""
+    try:
+        # Check file size (32MB limit)
+        contents = await file.read()
+        if len(contents) > 32 * 1024 * 1024:
+            return {"success": False, "message": "File size exceeds the 32MB limit for scanning."}
+
+        async with httpx.AsyncClient() as client:
+            headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
+            
+            # Step 1: Submit file to VT
+            files = {"file": (file.filename, contents)}
+            submit_res = await client.post(
+                "https://www.virustotal.com/api/v3/files", 
+                headers=headers, 
+                files=files
+            )
+            
+            if submit_res.status_code != 200:
+                error_msg = submit_res.json().get("error", {}).get("message", "Unknown VT Error")
+                return {"success": False, "message": f"VT Submission Error: {error_msg} (Status: {submit_res.status_code})"}
+            
+            analysis_id = submit_res.json().get("data", {}).get("id")
+            if not analysis_id:
+                return {"success": False, "message": "Failed to retrieve analysis ID from VirusTotal."}
+            
+            # Step 2: Poll for results (max 30s)
+            stats = {}
+            results = {}
+            status = "queued"
+            
+            for attempt in range(10):  # 10 attempts * 3s = 30s max
+                await asyncio.sleep(3)
+                result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+                
+                if result_res.status_code == 200:
+                    data_attr = result_res.json().get("data", {}).get("attributes", {})
+                    status = data_attr.get("status")
+                    stats = data_attr.get("stats", {})
+                    results = data_attr.get("results", {})
+                    
+                    if status == "completed":
+                        break
+                else: continue
+            
+            return {"success": True, "message": "File Analyzed", "data": {"stats": stats, "results": results, "status": status}}
+
+    except Exception as e:
+        return {"success": False, "message": f"File scanning error: {str(e)}"}
