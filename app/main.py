@@ -370,7 +370,8 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
                 data_attr = result_res.json().get("data", {}).get("attributes", {})
                 stats = data_attr.get("stats", {})
                 results = data_attr.get("results", {})
-                return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results}}
+                status = data_attr.get("status", "completed")
+                return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
             
             return {"success": False, "message": f"Result Fetch Error: {result_res.status_code}"}
     except Exception as e:
