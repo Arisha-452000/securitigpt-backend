@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 
 from . import models, database, config
 
-models.Base.metadata.create_all(bind=database.engine)
+# Models are now initialized in the @app.on_event("startup") event below
 app = FastAPI(title="CyberGuard Unified Backend")
 
 app.add_middleware(
@@ -32,6 +32,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Asynchronous startup tasks to avoid blocking the main thread for Render health checks."""
+    try:
+        models.Base.metadata.create_all(bind=database.engine)
+        init_admin()
+        print("Database initialized successfully during startup.")
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
+
 @app.get("/")
 def read_root():
     return {"success": True, "message": "CyberGuard Unified Backend API is Live"}
@@ -39,6 +49,9 @@ def read_root():
 @app.get("/health")
 @app.head("/health")
 def health_check():
+    """Health check for Render monitoring."""
+    # This print will show up in Render logs to confirm health checks are reaching the app
+    print(f"[{datetime.utcnow()}] Health check received")
     return {"status": "healthy", "timestamp": datetime.utcnow()}
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -60,7 +73,7 @@ def init_admin():
     finally:
         db.close()
 
-init_admin()
+# init_admin() removed from top level - now called in startup_event
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 # --- MASTER PROMPT ---
