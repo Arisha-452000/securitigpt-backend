@@ -367,8 +367,10 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
             
             if result_res.status_code == 200:
-                stats = result_res.json().get("data", {}).get("attributes", {}).get("stats", {})
-                return {"success": True, "message": "URL Analyzed", "data": stats}
+                data_attr = result_res.json().get("data", {}).get("attributes", {})
+                stats = data_attr.get("stats", {})
+                results = data_attr.get("results", {})
+                return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results}}
             
             return {"success": False, "message": f"Result Fetch Error: {result_res.status_code}"}
     except Exception as e:
