@@ -340,7 +340,17 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
-            # Step 1: Submit URL for scanning
+            # Step 1: Try getting an existing report (fastest for common URLs)
+            url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
+            report_res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
+            
+            if report_res.status_code == 200:
+                data_attr = report_res.json().get("data", {}).get("attributes", {})
+                stats = data_attr.get("last_analysis_stats", {})
+                results = data_attr.get("last_analysis_results", {})
+                return {"success": True, "message": "Report found", "data": {"stats": stats, "results": results, "status": "completed"}}
+            
+            # Step 2: If not found, submit for a new scan (the previous flow)
             submit_res = await client.post(
                 "https://www.virustotal.com/api/v3/urls", 
                 headers=headers, 
@@ -348,22 +358,16 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             )
             
             if submit_res.status_code != 200:
-                # If submission fails, try getting the report directly (maybe it already exists)
-                url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
-                direct_res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
-                if direct_res.status_code == 200:
-                    stats = direct_res.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-                    return {"success": True, "message": "Cached Results found", "data": stats}
                 return {"success": False, "message": f"VT Error: {submit_res.status_code}"}
             
             analysis_id = submit_res.json().get("data", {}).get("id")
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Step 2: Wait for analysis (simulated for simplicity)
+            # Step 3: Wait for analysis
             await asyncio.sleep(10)
             
-            # Step 3: Get analysis results
+            # Step 4: Get analysis results
             result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
             
             if result_res.status_code == 200:
