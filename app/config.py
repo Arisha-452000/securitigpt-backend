@@ -12,4 +12,4 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./securitigpt.db")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "ca2944957a797da80ad4a383c5f1809971f8886b6599f86902d3d2e974c47c16")
 HIBP_API_KEY = os.environ.get("HIBP_API_KEY", "mock_key_needed_only_if_unmocked")
-
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "emailbreachcheck.p.rapidapi.com")
