@@ -353,17 +353,7 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
-            # Step 1: Try getting an existing report (fastest for common URLs)
-            url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
-            report_res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
-            
-            if report_res.status_code == 200:
-                data_attr = report_res.json().get("data", {}).get("attributes", {})
-                stats = data_attr.get("last_analysis_stats", {})
-                results = data_attr.get("last_analysis_results", {})
-                return {"success": True, "message": "Report found", "data": {"stats": stats, "results": results, "status": "completed"}}
-            
-            # Step 2: If not found, submit for a new scan (the previous flow)
+            # Step 1: Always submit for a new/refreshed scan (ensures latest data)
             submit_res = await client.post(
                 "https://www.virustotal.com/api/v3/urls", 
                 headers=headers, 
@@ -377,20 +367,29 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Step 3: Wait for analysis
-            await asyncio.sleep(10)
+            # Step 2: Poll for completion (up to 30 seconds total)
+            stats = {}
+            results = {}
+            status = "queued"
             
-            # Step 4: Get analysis results
-            result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+            for attempt in range(10):  # 10 attempts * 3s = 30s max
+                await asyncio.sleep(3)
+                result_res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+                
+                if result_res.status_code == 200:
+                    data_attr = result_res.json().get("data", {}).get("attributes", {})
+                    status = data_attr.get("status")
+                    stats = data_attr.get("stats", {})
+                    results = data_attr.get("results", {})
+                    
+                    # Exit polling as soon as it's completed
+                    if status == "completed":
+                        break
+                else:
+                    # If analysis fetch fails temporarily, keep trying until timeout
+                    continue
             
-            if result_res.status_code == 200:
-                data_attr = result_res.json().get("data", {}).get("attributes", {})
-                stats = data_attr.get("stats", {})
-                results = data_attr.get("results", {})
-                status = data_attr.get("status", "completed")
-                return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
-            
-            return {"success": False, "message": f"Result Fetch Error: {result_res.status_code}"}
+            return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
     except Exception as e:
         return {"success": False, "message": f"Connection error: {str(e)}"}
 
