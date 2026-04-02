@@ -269,7 +269,7 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
         traceback.print_exc()
         return {"success": False, "message": f"Global Error: {str(e)} - {type(e).__name__}"}
 
-async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers: dict, max_attempts: int = 15, delay: int = 4):
+async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers: dict, max_attempts: int = 20, delay: int = 4):
     """Wait for a VirusTotal analysis to complete with a robust polling loop."""
     stats = {}
     results = {}
