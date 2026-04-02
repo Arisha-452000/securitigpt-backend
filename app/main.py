@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 from passlib.context import CryptContext
@@ -37,6 +38,16 @@ async def startup_event():
     """Asynchronous startup tasks to avoid blocking the main thread for Render health checks."""
     try:
         models.Base.metadata.create_all(bind=database.engine)
+        
+        # Safe migration: Add full_name column if missing (for Render/Production)
+        with database.engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
+                conn.commit()
+            except Exception as e:
+                # Standard ALTER might fail if column exists or on some SQL flavors
+                print(f"Safe Migration note: {e}")
+
         init_admin()
         print("Database initialized successfully during startup.")
     except Exception as e:
