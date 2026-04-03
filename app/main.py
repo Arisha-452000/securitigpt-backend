@@ -141,6 +141,10 @@ class PasswordChangeRequest(BaseModel):
     old_password: str
     new_password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+    new_password: str
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -225,6 +229,16 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
     user.password_hash = get_password_hash(req.new_password)
     db.commit()
     return {"success": True, "message": "Password updated successfully"}
+
+@app.post("/auth/reset-password")
+async def reset_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.email == req.email).first()
+    if not user:
+        return {"success": False, "message": "Email not found"}
+    
+    user.password_hash = get_password_hash(req.new_password)
+    db.commit()
+    return {"success": True, "message": "Password reset successfully"}
 
 @app.get("/user/profile")
 def profile(user: models.User = Depends(get_current_user)):
