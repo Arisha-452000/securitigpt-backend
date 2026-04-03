@@ -294,8 +294,9 @@ def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     db.refresh(user)
     
     token = create_access_token({"sub": user.email})
-    print(f"SIGNUP DEBUG: User {user.email} created. is_admin: {user.is_admin}")
-    return {"success": True, "message": "Account created successfully", "data": {"access_token": token, "is_admin": user.is_admin}}
+    is_admin = bool(user.is_admin)
+    print(f"SIGNUP DEBUG: User {user.email} created. is_admin: {is_admin}")
+    return {"success": True, "message": "Account created successfully", "data": {"access_token": token, "is_admin": is_admin}}
 
 @app.post("/auth/login")
 def login(req: AuthRequest, db: Session = Depends(database.get_db)):
@@ -304,8 +305,9 @@ def login(req: AuthRequest, db: Session = Depends(database.get_db)):
         return {"success": False, "message": "Invalid credentials"}
     
     token = create_access_token({"sub": user.email})
-    print(f"LOGIN DEBUG: User {user.email} logged in. is_admin: {user.is_admin} (Type: {type(user.is_admin)})")
-    return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": user.is_admin}}
+    is_admin = bool(user.is_admin)
+    print(f"LOGIN DEBUG: User {user.email} logged in. is_admin: {is_admin}")
+    return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": is_admin}}
 
 @app.post("/auth/change-password")
 async def change_password(req: PasswordChangeRequest, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
@@ -339,7 +341,8 @@ def profile(user: models.User = Depends(get_current_user)):
         "data": {
             "email": user.email, 
             "full_name": user.full_name,
-            "credits": user.credits
+            "credits": user.credits,
+            "is_admin": bool(user.is_admin)
         }
     }
 
