@@ -67,20 +67,38 @@ def health_check():
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Automatically recreate admin user in case the database was wiped
+# Automatically recreate admin users in case the database was wiped
 def init_admin():
     db = database.SessionLocal()
     try:
-        if not db.query(models.User).filter(models.User.email == "admin@securitigpt.com").first():
-            admin_user = models.User(
-                email="admin@securitigpt.com",
-                password_hash=pwd_context.hash("admin123"),
+        # Create New Admin 1: Abdullah
+        if not db.query(models.User).filter(models.User.email == "abdullah@securitigpt.com").first():
+            admin1 = models.User(
+                email="abdullah@securitigpt.com",
+                password_hash=pwd_context.hash("A.452004!"),
+                full_name="Abdullah",
                 credits=999999
             )
-            db.add(admin_user)
-            db.commit()
-    except Exception:
-        pass
+            db.add(admin1)
+        
+        # Create New Admin 2: Arisha
+        if not db.query(models.User).filter(models.User.email == "arisha@securitigpt.com").first():
+            admin2 = models.User(
+                email="arisha@securitigpt.com",
+                password_hash=pwd_context.hash("A.a452004!"),
+                full_name="Arisha",
+                credits=999999
+            )
+            db.add(admin2)
+            
+        # Remove old admin if exists
+        old_admin = db.query(models.User).filter(models.User.email == "admin@securitigpt.com").first()
+        if old_admin:
+            db.delete(old_admin)
+            
+        db.commit()
+    except Exception as e:
+        print(f"Admin init error: {e}")
     finally:
         db.close()
 
