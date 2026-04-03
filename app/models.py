@@ -6,8 +6,9 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
-    full_name = Column(String, nullable=True)
     password_hash = Column(String)
+    full_name = Column(String, nullable=True)
+    is_admin = Column(Boolean, default=False)
     credits = Column(Integer, default=100)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
