@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from pydantic import BaseModel
 from typing import Optional
 from passlib.context import CryptContext
@@ -39,15 +39,21 @@ async def startup_event():
     try:
         models.Base.metadata.create_all(bind=database.engine)
         
-        # Safe migration: Add full_name column if missing (for Render/Production)
+        # Robust Migration: Check for columns before adding (safer for SQLite/Postgres mix)
+        inspector = inspect(database.engine)
+        columns = [c['name'] for c in inspector.get_columns('users')]
+        
         with database.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
-                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE"))
-                conn.commit()
-            except Exception as e:
-                # Standard ALTER might fail if column exists or on some SQL flavors
-                print(f"Safe Migration note: {e}")
+            if 'full_name' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR"))
+                print("Migration: Added full_name column")
+            
+            if 'is_admin' not in columns:
+                # Use a specific syntax for boolean default that works across most dialects
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
+                print("Migration: Added is_admin column")
+            
+            conn.commit()
 
         init_admin()
         print("Database initialized successfully during startup.")
@@ -73,10 +79,12 @@ def init_admin():
     db = database.SessionLocal()
     try:
         admins = [
-            ("admin@securitigpt.com", "admin123"),
             ("abdullah@securitigpt.com", "A.452004!"),
             ("arisha@securitigpt.com", "A.a452004!")
         ]
+        # First, reset is_admin for everyone to ensure we exactly manage our 2 admins
+        db.query(models.User).update({models.User.is_admin: False})
+        
         for email, password in admins:
             user = db.query(models.User).filter(models.User.email == email).first()
             if not user:
@@ -88,8 +96,8 @@ def init_admin():
                 )
                 db.add(admin_user)
             else:
-                # Update existing user to be admin if they were already registered
                 user.is_admin = True
+                user.password_hash = pwd_context.hash(password) # Force sync password
                 user.credits = max(user.credits, 999999)
         db.commit()
     except Exception as e:
@@ -267,6 +275,7 @@ def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     db.refresh(user)
     
     token = create_access_token({"sub": user.email})
+    print(f"SIGNUP DEBUG: User {user.email} created. is_admin: {user.is_admin}")
     return {"success": True, "message": "Account created successfully", "data": {"access_token": token, "is_admin": user.is_admin}}
 
 @app.post("/auth/login")
@@ -276,6 +285,7 @@ def login(req: AuthRequest, db: Session = Depends(database.get_db)):
         return {"success": False, "message": "Invalid credentials"}
     
     token = create_access_token({"sub": user.email})
+    print(f"LOGIN DEBUG: User {user.email} logged in. is_admin: {user.is_admin} (Type: {type(user.is_admin)})")
     return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": user.is_admin}}
 
 @app.post("/auth/change-password")
