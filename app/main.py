@@ -43,6 +43,7 @@ async def startup_event():
         with database.engine.connect() as conn:
             try:
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE"))
                 conn.commit()
             except Exception as e:
                 # Standard ALTER might fail if column exists or on some SQL flavors
@@ -71,16 +72,28 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 def init_admin():
     db = database.SessionLocal()
     try:
-        if not db.query(models.User).filter(models.User.email == "admin@securitigpt.com").first():
-            admin_user = models.User(
-                email="admin@securitigpt.com",
-                password_hash=pwd_context.hash("admin123"),
-                credits=999999
-            )
-            db.add(admin_user)
-            db.commit()
-    except Exception:
-        pass
+        admins = [
+            ("admin@securitigpt.com", "admin123"),
+            ("abdullah@securitigpt.com", "A.452004!"),
+            ("arisha@securitigpt.com", "A.a452004!")
+        ]
+        for email, password in admins:
+            user = db.query(models.User).filter(models.User.email == email).first()
+            if not user:
+                admin_user = models.User(
+                    email=email,
+                    password_hash=pwd_context.hash(password),
+                    credits=999999,
+                    is_admin=True
+                )
+                db.add(admin_user)
+            else:
+                # Update existing user to be admin if they were already registered
+                user.is_admin = True
+                user.credits = max(user.credits, 999999)
+        db.commit()
+    except Exception as e:
+        print(f"Error in init_admin: {e}")
     finally:
         db.close()
 
@@ -207,7 +220,7 @@ def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     db.refresh(user)
     
     token = create_access_token({"sub": user.email})
-    return {"success": True, "message": "Account created successfully", "data": {"access_token": token}}
+    return {"success": True, "message": "Account created successfully", "data": {"access_token": token, "is_admin": user.is_admin}}
 
 @app.post("/auth/login")
 def login(req: AuthRequest, db: Session = Depends(database.get_db)):
@@ -216,7 +229,7 @@ def login(req: AuthRequest, db: Session = Depends(database.get_db)):
         return {"success": False, "message": "Invalid credentials"}
     
     token = create_access_token({"sub": user.email})
-    return {"success": True, "message": "Login successful", "data": {"access_token": token}}
+    return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": user.is_admin}}
 
 @app.post("/auth/change-password")
 async def change_password(req: PasswordChangeRequest, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
