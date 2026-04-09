@@ -266,19 +266,8 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
             db.commit()
             print(f"After deduction - User: {user.email}, Credits: {user.credits}")
 
-        # Using a system prompt to enforce formatting rules
-        system_message = {
-            "role": "system", 
-            "content": (
-                "You are Securiti GPT, an advanced cybersecurity AI assistant. "
-                "1. Formatting: ALWAYS use markdown code blocks for code snippets, bash commands, or configuration (e.g., ```bash, ```python, etc.). "
-                "2. Headers: DO NOT use '###' headers. Use bold text (**Header**) for sections instead. "
-                "3. Style: Maintain a professional, helpful, and concise tone."
-            )
-        }
-        
+        # Using direct user message without system or master prompts
         prompt = [
-            system_message,
             {"role": "user", "content": req.message}
         ]
         
@@ -407,17 +396,13 @@ async def admin_update_credits(req: AdminCreditRequest, admin_user: models.User 
     if not admin_user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
-    # Enforce 100 credit limit
-    if req.credits > 100:
-        raise HTTPException(status_code=400, detail="Credits cannot exceed 100")
-    
     # Find the user to update
     user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Update user credits (capped at 100)
-    user.credits = min(req.credits, 100)
+    # Update user credits
+    user.credits = req.credits
     db.commit()
     
     return {"success": True, "message": "Credits updated successfully", "data": {"email": user.email, "credits": user.credits}}
