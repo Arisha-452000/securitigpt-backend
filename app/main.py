@@ -266,8 +266,19 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
             db.commit()
             print(f"After deduction - User: {user.email}, Credits: {user.credits}")
 
-        # Using direct user message without system or master prompts
+        # Using a system prompt to enforce formatting rules
+        system_message = {
+            "role": "system", 
+            "content": (
+                "You are Securiti GPT, an advanced cybersecurity AI assistant. "
+                "1. Formatting: ALWAYS use markdown code blocks for code snippets, bash commands, or configuration (e.g., ```bash, ```python, etc.). "
+                "2. Headers: DO NOT use '###' headers. Use bold text (**Header**) for sections instead. "
+                "3. Style: Maintain a professional, helpful, and concise tone."
+            )
+        }
+        
         prompt = [
+            system_message,
             {"role": "user", "content": req.message}
         ]
         
