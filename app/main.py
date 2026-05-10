@@ -17,6 +17,7 @@ from . import models, database, config
 # Models are now initialized in the @app.on_event("startup") event below
 app = FastAPI(title="CyberGuard Unified Backend")
 
+# CORS Configuration - Refined for production and local development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -24,14 +25,26 @@ app.add_middleware(
         "https://www.securitigpt.com",
         "http://securitigpt.com",
         "http://www.securitigpt.com",
-        "http://localhost:5500",  # For local testing
-        "http://127.0.0.1:5500"   # For local testing
+        "https://securitigpt-backend.onrender.com",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
-    allow_origin_regex="https://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Debug Middleware to log all incoming requests (helpful for Render logs)
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    origin = request.headers.get("origin")
+    method = request.method
+    path = request.url.path
+    print(f"DEBUG: {method} request to {path} from origin {origin}")
+    response = await call_next(request)
+    return response
 
 @app.on_event("startup")
 async def startup_event():
@@ -132,6 +145,9 @@ class ToolRequest(BaseModel):
     url: Optional[str] = None
     email: Optional[str] = None
     input: Optional[str] = None
+
+class BroadcastRequest(BaseModel):
+    message: str
 
 # --- DEPENDENCIES ---
 def verify_password(plain_password, hashed_password):
@@ -416,6 +432,8 @@ async def clear_guest_sessions(admin_user: models.User = Depends(get_current_use
 
 @app.get("/admin/users")
 async def get_all_users(admin_user: models.User = Depends(get_current_user), db: Session = Depends(database.get_db)):
+    if not admin_user or not admin_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     # Get all users with their current credits
     users = db.query(models.User).all()
     return [
@@ -427,6 +445,41 @@ async def get_all_users(admin_user: models.User = Depends(get_current_user), db:
         }
         for user in users
     ]
+
+@app.post("/admin/broadcast")
+async def create_broadcast(req: BroadcastRequest, admin_user: models.User = Depends(get_current_user), db: Session = Depends(database.get_db)):
+    if not admin_user or not admin_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Deactivate previous broadcasts
+    db.query(models.Broadcast).update({models.Broadcast.active: False})
+    
+    broadcast = models.Broadcast(message=req.message)
+    db.add(broadcast)
+    db.commit()
+    return {"success": True, "message": "Broadcast sent successfully"}
+
+@app.get("/user/broadcast")
+async def get_latest_broadcast(db: Session = Depends(database.get_db)):
+    broadcast = db.query(models.Broadcast).filter(models.Broadcast.active == True).order_by(models.Broadcast.created_at.desc()).first()
+    if not broadcast:
+        return {"success": True, "data": None}
+    return {"success": True, "data": {"id": broadcast.id, "message": broadcast.message}}
+
+@app.get("/admin/stats-details")
+async def get_stats_details(admin_user: models.User = Depends(get_current_user), db: Session = Depends(database.get_db)):
+    if not admin_user or not admin_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Return mock data for Chart.js (in a real app, this would query historical logs)
+    return {
+        "success": True,
+        "data": {
+            "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            "usage": [45, 52, 38, 65, 48, 25, 30],
+            "signups": [5, 8, 4, 12, 7, 3, 5]
+        }
+    }
 
 @app.post("/tools/virus-check-file")
 async def virus_check_file(file: UploadFile = File(...), user: models.User = Depends(require_credits(20))):
