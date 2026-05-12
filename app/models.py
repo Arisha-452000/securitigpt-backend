@@ -10,6 +10,8 @@ class User(Base):
     full_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     credits = Column(Integer, default=100)
+    reset_otp = Column(String, nullable=True)
+    otp_expiry = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class GuestSession(Base):
@@ -17,4 +19,11 @@ class GuestSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     ip_address = Column(String, unique=True, index=True)
     has_chatted = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+    id = Column(Integer, primary_key=True, index=True)
+    message = Column(String)
+    active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
