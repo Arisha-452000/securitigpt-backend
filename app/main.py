@@ -12,6 +12,8 @@ import httpx
 import asyncio
 import base64
 from openai import AsyncOpenAI
+import random
+import string
 
 from . import models, database, config
 
@@ -66,6 +68,14 @@ async def startup_event():
                 # Use a specific syntax for boolean default that works across most dialects
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
                 print("Migration: Added is_admin column")
+
+            if 'reset_otp' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN reset_otp VARCHAR"))
+                print("Migration: Added reset_otp column")
+
+            if 'otp_expiry' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN otp_expiry TIMESTAMP"))
+                print("Migration: Added otp_expiry column")
             
             conn.commit()
 
@@ -139,6 +149,14 @@ class ForgotPasswordRequest(BaseModel):
     email: str
     new_password: str
 
+class PasswordResetRequest(BaseModel):
+    email: str
+
+class PasswordResetConfirm(BaseModel):
+    email: str
+    otp: str
+    new_password: str
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -188,6 +206,43 @@ def require_credits(cost: int):
     return credit_checker
 
 # --- ROUTES ---
+@app.post("/auth/forgot-password")
+async def forgot_password(req: PasswordResetRequest, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.email == req.email).first()
+    if not user:
+        # For security, don't reveal if user exists, but here we'll just return success for simplicity
+        return {"success": True, "message": "If this email exists, an OTP has been sent."}
+    
+    # Generate 6-digit OTP
+    otp = ''.join(random.choices(string.digits, k=6))
+    user.reset_otp = otp
+    user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+    db.commit()
+    
+    # MOCK EMAIL SENDING: Print to console
+    print(f"\n******************************************")
+    print(f"PASSWORD RESET OTP FOR {user.email}: {otp}")
+    print(f"******************************************\n")
+    
+    return {"success": True, "message": "OTP sent to your email (Mocked in console)"}
+
+@app.post("/auth/reset-password-otp")
+async def reset_password_otp(req: PasswordResetConfirm, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.email == req.email).first()
+    if not user or user.reset_otp != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP or Email")
+    
+    if datetime.utcnow() > user.otp_expiry:
+        raise HTTPException(status_code=400, detail="OTP has expired")
+    
+    # Update password
+    user.password_hash = pwd_context.hash(req.new_password)
+    user.reset_otp = None # Clear OTP
+    user.otp_expiry = None
+    db.commit()
+    
+    return {"success": True, "message": "Password changed successfully"}
+
 @app.post("/auth/signup")
 def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     if db.query(models.User).filter(models.User.email == req.email).first():
