@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
-from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
@@ -12,15 +11,12 @@ import httpx
 import asyncio
 import base64
 from openai import AsyncOpenAI
-import random
-import string
 
 from . import models, database, config
 
 # Models are now initialized in the @app.on_event("startup") event below
 app = FastAPI(title="CyberGuard Unified Backend")
 
-# CORS Configuration - Refined for production and local development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -28,26 +24,14 @@ app.add_middleware(
         "https://www.securitigpt.com",
         "http://securitigpt.com",
         "http://www.securitigpt.com",
-        "https://securitigpt-backend.onrender.com",
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+        "http://localhost:5500",  # For local testing
+        "http://127.0.0.1:5500"   # For local testing
     ],
+    allow_origin_regex="https://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Debug Middleware to log all incoming requests (helpful for Render logs)
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    origin = request.headers.get("origin")
-    method = request.method
-    path = request.url.path
-    print(f"DEBUG: {method} request to {path} from origin {origin}")
-    response = await call_next(request)
-    return response
 
 @app.on_event("startup")
 async def startup_event():
@@ -68,14 +52,6 @@ async def startup_event():
                 # Use a specific syntax for boolean default that works across most dialects
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
                 print("Migration: Added is_admin column")
-
-            if 'reset_otp' not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN reset_otp VARCHAR"))
-                print("Migration: Added reset_otp column")
-
-            if 'otp_expiry' not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN otp_expiry TIMESTAMP"))
-                print("Migration: Added otp_expiry column")
             
             conn.commit()
 
@@ -149,14 +125,6 @@ class ForgotPasswordRequest(BaseModel):
     email: str
     new_password: str
 
-class PasswordResetRequest(BaseModel):
-    email: str
-
-class PasswordResetConfirm(BaseModel):
-    email: str
-    otp: str
-    new_password: str
-
 class ChatRequest(BaseModel):
     message: str
 
@@ -206,43 +174,6 @@ def require_credits(cost: int):
     return credit_checker
 
 # --- ROUTES ---
-@app.post("/auth/forgot-password")
-async def forgot_password(req: PasswordResetRequest, db: Session = Depends(database.get_db)):
-    user = db.query(models.User).filter(models.User.email == req.email).first()
-    if not user:
-        # For security, don't reveal if user exists, but here we'll just return success for simplicity
-        return {"success": True, "message": "If this email exists, an OTP has been sent."}
-    
-    # Generate 6-digit OTP
-    otp = ''.join(random.choices(string.digits, k=6))
-    user.reset_otp = otp
-    user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
-    db.commit()
-    
-    # MOCK EMAIL SENDING: Print to console
-    print(f"\n******************************************")
-    print(f"PASSWORD RESET OTP FOR {user.email}: {otp}")
-    print(f"******************************************\n")
-    
-    return {"success": True, "message": "OTP sent to your email (Mocked in console)"}
-
-@app.post("/auth/reset-password-otp")
-async def reset_password_otp(req: PasswordResetConfirm, db: Session = Depends(database.get_db)):
-    user = db.query(models.User).filter(models.User.email == req.email).first()
-    if not user or user.reset_otp != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP or Email")
-    
-    if datetime.utcnow() > user.otp_expiry:
-        raise HTTPException(status_code=400, detail="OTP has expired")
-    
-    # Update password
-    user.password_hash = pwd_context.hash(req.new_password)
-    user.reset_otp = None # Clear OTP
-    user.otp_expiry = None
-    db.commit()
-    
-    return {"success": True, "message": "Password changed successfully"}
-
 @app.post("/auth/signup")
 def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     if db.query(models.User).filter(models.User.email == req.email).first():
@@ -343,35 +274,28 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
             {"role": "user", "content": req.message}
         ]
         
-        # Real Streaming Generator
-        async def event_generator():
-            try:
-                stream = await openai_client.chat.completions.create(
-                    model="gpt-4o-mini", 
-                    messages=prompt, 
-                    temperature=0.7, 
-                    max_tokens=2000,
-                    stream=True
-                )
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                yield f"\n[Backend Error: {str(e)}]"
-
-        return StreamingResponse(event_generator(), media_type="text/plain")
-
-    except HTTPException as e:
-        raise e
+        try:
+            response = await openai_client.chat.completions.create(
+                model="gpt-4o-mini", 
+                messages=prompt, 
+                temperature=0.7, 
+                max_tokens=2000   # Increased for deeper answers
+            )
+            reply = response.choices[0].message.content
+            remaining_credits = user.credits if user else None
+            return {"success": True, "message": "Chat generated", "data": {"reply": reply, "credits_remaining": remaining_credits}}
+        except Exception as e:
+            # Refund credits on error for logged-in users
+            import traceback
+            traceback.print_exc()
+            if user:
+                user.credits += 5
+                db.commit()
+            return {"success": False, "message": f"OpenAI Error: {str(e)}"}
     except Exception as e:
         import traceback
         traceback.print_exc()
-        if user:
-            user.credits += 5
-            db.commit()
-        return {"success": False, "message": f"Server Error: {str(e)}"}
+        return {"success": False, "message": f"Global Error: {str(e)} - {type(e).__name__}"}
 
 async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers: dict, max_attempts: int = 20, delay: int = 4):
     """Wait for a VirusTotal analysis to complete with a robust polling loop."""
