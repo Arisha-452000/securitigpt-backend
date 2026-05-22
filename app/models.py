@@ -10,8 +10,6 @@ class User(Base):
     full_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     credits = Column(Integer, default=100)
-    reset_otp = Column(String, nullable=True)
-    otp_expiry = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class GuestSession(Base):
