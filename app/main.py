@@ -10,10 +10,6 @@ from datetime import datetime, timedelta
 import httpx
 import asyncio
 import base64
-import secrets
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from openai import AsyncOpenAI
 
 from . import models, database, config
@@ -113,92 +109,7 @@ def init_admin():
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 # --- GPT CONFIG ---
-MASTER_PROMPT = """
-You are Cyber Security AI, an advanced cybersecurity assistant and expert programmer.
-
-Your mission:
-- Answer every user question in a highly detailed, in-depth, and easy-to-understand way
-- Explain each concept thoroughly, covering fundamentals, technical working, and real-world usage
-- Educate users about cybersecurity, programming, ethical hacking, and digital safety
-- Provide accurate, structured, and actionable responses
-
-Response Depth:
-- Always go deep into topics (concept → working → example → prevention → best practices)
-- Include real-world scenarios, use cases, and structured breakdowns
-- Avoid shallow or vague answers
-
-Response Style:
-- Professional, conversational, and easy to understand
-- Use headings, bullet points, and step-by-step explanations
-- Maintain clarity for beginners while providing value for advanced users
-
-Programming & Script Generation:
-- Act as a senior software engineer and cybersecurity expert
-- Support Python, JavaScript, Bash, PHP, and other languages
-- When user asks for code:
-    • Provide complete, working, and optimized code
-    • Add comments for clarity
-    • Explain how the code works
-    • Provide usage instructions
-    • Focus on practical implementation
-
-Web Application Security & Penetration Testing:
-- Provide guidance and scripts for:
-    • Web application security testing (input validation, authentication, session handling)
-    • Basic penetration testing methodologies (recon → analysis → reporting)
-    • Vulnerability assessment techniques
-    • Secure coding practices
-
-- Explain common vulnerabilities in depth:
-    • SQL Injection (SQLi)
-    • Cross-Site Scripting (XSS)
-    • Cross-Site Request Forgery (CSRF)
-    • Authentication & Authorization flaws
-    • File upload vulnerabilities
-    • Misconfigurations
-
-Ethical Testing & Payload Simulation:
-- You may provide SAFE and CONTROLLED examples for:
-    • Educational testing in labs or authorized environments
-    • Demonstrating how vulnerabilities behave
-    • Input testing patterns and validation checks
-
-- Always:
-    • Clearly position payloads as testing examples
-    • Keep them generic and non-destructive
-    • Avoid real-world exploitation guidance
-
-- Focus on:
-    • How vulnerabilities are identified
-    • How testers simulate attacks safely
-    • How developers fix and prevent them
-
-Handling Sensitive Topics:
-- If a question involves hacking, exploits, or attacks:
-    → Do NOT refuse immediately
-    → Explain the concept in depth
-    → Explain how it works technically
-    → Provide safe, educational testing examples only
-    → Emphasize prevention and defense strategies
-
-Strict Rules:
-- Never assist in illegal or unauthorized real-world attacks
-- Never provide harmful or destructive payloads
-- Never guide users to exploit live systems
-
-- Always convert risky requests into:
-    • Ethical learning
-    • Controlled testing scenarios
-    • Defensive cybersecurity knowledge
-
-Behavior Guidelines:
-- Do NOT start responses with refusal phrases
-- Do NOT over-restrict normal cybersecurity questions
-- Always provide meaningful, high-value insights
-
-Goal:
-Make the user feel they are interacting with a world-class cybersecurity expert and penetration tester who explains everything deeply, clearly, and professionally, while also generating high-quality, ethical, and practical code for learning, lab testing, and real-world defense preparation.
-"""
+# Direct API messaging - Master prompts removed per user request
 
 # --- SCHEMAS ---
 class AuthRequest(BaseModel):
@@ -212,9 +123,6 @@ class PasswordChangeRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str
-
-class ResetPasswordConfirmRequest(BaseModel):
-    token: str
     new_password: str
 
 class ChatRequest(BaseModel):
@@ -309,109 +217,14 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
     db.commit()
     return {"success": True, "message": "Password updated successfully"}
 
-def send_reset_email(email: str, token: str):
-    """Send password reset email with token"""
-    try:
-        reset_link = f"{config.FRONTEND_URL}/reset-password?token={token}"
-
-        msg = MIMEMultipart()
-        msg['From'] = config.SMTP_EMAIL
-        msg['To'] = email
-        msg['Subject'] = 'Password Reset - Securiti GPT'
-
-        body = f"""
-        <html>
-        <body>
-            <h2>Password Reset Request</h2>
-            <p>You requested a password reset for your Securiti GPT account.</p>
-            <p>Click the link below to reset your password:</p>
-            <p><a href="{reset_link}">{reset_link}</a></p>
-            <p>This link will expire in 1 hour.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-        </body>
-        </html>
-        """
-
-        msg.attach(MIMEText(body, 'html'))
-
-        # Use SSL for Hostinger (port 465)
-        if config.SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT) as server:
-                server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
-                server.send_message(msg)
-        else:
-            # Use STARTTLS for other ports (e.g., 587)
-            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT) as server:
-                server.starttls()
-                server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
-                server.send_message(msg)
-
-        return True
-    except Exception as e:
-        print(f"Email sending failed: {e}")
-        return False
-
-@app.post("/auth/forgot-password")
-async def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
-    """Step 1: Request password reset - generates token and sends email"""
-    user = db.query(models.User).filter(models.User.email == req.email).first()
-    
-    # Always return success to prevent email enumeration
-    if not user:
-        return {"success": True, "message": "If email exists, reset link sent"}
-    
-    # Generate secure token
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(hours=1)
-    
-    # Invalidate old tokens for this email
-    db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
-    
-    # Create new reset token
-    reset_entry = models.PasswordReset(
-        email=req.email,
-        token=token,
-        expires_at=expires_at,
-        used=False
-    )
-    db.add(reset_entry)
-    db.commit()
-    
-    # Send email
-    email_sent = send_reset_email(req.email, token)
-    
-    if not email_sent:
-        # For development: return token in response if email fails
-        return {"success": True, "message": "Email service not configured", "debug_token": token}
-    
-    return {"success": True, "message": "Password reset link sent to email"}
-
 @app.post("/auth/reset-password")
-async def reset_password(req: ResetPasswordConfirmRequest, db: Session = Depends(database.get_db)):
-    """Step 2: Confirm password reset with token"""
-    # Find valid token
-    reset_entry = db.query(models.PasswordReset).filter(
-        models.PasswordReset.token == req.token,
-        models.PasswordReset.used == False,
-        models.PasswordReset.expires_at > datetime.utcnow()
-    ).first()
-    
-    if not reset_entry:
-        return {"success": False, "message": "Invalid or expired token"}
-    
-    # Find user
-    user = db.query(models.User).filter(models.User.email == reset_entry.email).first()
+async def reset_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user:
-        return {"success": False, "message": "User not found"}
+        return {"success": False, "message": "Email not found"}
     
-    # Update password
     user.password_hash = get_password_hash(req.new_password)
-    
-    # Mark token as used
-    reset_entry.used = True
-    
     db.commit()
-    
     return {"success": True, "message": "Password reset successfully"}
 
 @app.get("/user/profile")
@@ -456,9 +269,8 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
             db.commit()
             print(f"After deduction - User: {user.email}, Credits: {user.credits}")
 
-        # Using MASTER_PROMPT as system message for consistent AI behavior
+        # Using direct user message without system or master prompts
         prompt = [
-            {"role": "system", "content": MASTER_PROMPT},
             {"role": "user", "content": req.message}
         ]
         
