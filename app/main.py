@@ -11,6 +11,7 @@ import httpx
 import asyncio
 import base64
 import secrets
+import random
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -216,8 +217,13 @@ class ForgotPasswordRequest(BaseModel):
 class RequestPasswordResetRequest(BaseModel):
     email: str
 
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+
 class ConfirmPasswordResetRequest(BaseModel):
-    token: str
+    email: str
+    code: str
     new_password: str
 
 class ChatRequest(BaseModel):
@@ -269,47 +275,72 @@ def require_credits(cost: int):
     return credit_checker
 
 # --- PASSWORD RESET HELPER FUNCTIONS ---
+def generate_reset_code():
+    """Generate a 6-digit code for password reset."""
+    return str(random.randint(100000, 999999))
+
 def generate_reset_token():
     """Generate a secure random token for password reset."""
     return secrets.token_urlsafe(32)
 
-def send_password_reset_email(email: str, token: str):
-    """Send password reset email with the token."""
+def send_password_reset_email(email: str, code: str):
+    """Send password reset email with the verification code."""
     try:
-        # Create reset link
-        reset_link = f"{config.FRONTEND_URL}/reset-password?token={token}"
-        
         # Create email message
         message = MIMEMultipart("alternative")
-        message["Subject"] = "Password Reset Request - CyberGuard"
+        message["Subject"] = "Password Reset Code - CyberGuard"
         message["From"] = config.EMAIL_FROM
         message["To"] = email
-        
-        # Email body
+
+        # Email body with code
         html = f"""
         <html>
         <body>
             <h2>Password Reset Request</h2>
             <p>You requested a password reset for your CyberGuard account.</p>
-            <p>Click the link below to reset your password:</p>
-            <p><a href="{reset_link}">{reset_link}</a></p>
-            <p>This link will expire in 30 minutes.</p>
+            <p>Your verification code is:</p>
+            <h1 style="color: #0066cc; font-size: 32px; letter-spacing: 5px;">{code}</h1>
+            <p>This code will expire in 30 minutes.</p>
             <p>If you didn't request this, please ignore this email.</p>
-            <p><strong>Security Note:</strong> Never share this link with anyone.</p>
+            <p><strong>Security Note:</strong> Never share this code with anyone.</p>
         </body>
         </html>
         """
-        
+
         message.attach(MIMEText(html, "html"))
-        
+
+        # Log email sending attempt
+        print(f"[EMAIL] Attempting to send password reset email to: {email}")
+        print(f"[EMAIL] Verification Code: {code}")
+        print(f"[EMAIL] SMTP Host: {config.EMAIL_HOST}, Port: {config.EMAIL_PORT}")
+        print(f"[EMAIL] From: {config.EMAIL_FROM}")
+
+        # Check if password is set
+        if not config.EMAIL_PASSWORD:
+            print("[EMAIL] ERROR: EMAIL_PASSWORD environment variable is not set!")
+            return False
+
         # Send email using SSL for Hostinger (port 465)
         with smtplib.SMTP_SSL(config.EMAIL_HOST, config.EMAIL_PORT) as server:
+            print("[EMAIL] Connecting to SMTP server...")
             server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
+            print("[EMAIL] SMTP login successful")
             server.sendmail(config.EMAIL_FROM, email, message.as_string())
-        
+            print(f"[EMAIL] Email sent successfully to {email}")
+
         return True
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"[EMAIL] ERROR: SMTP Authentication Failed - {e}")
+        print("[EMAIL] Check EMAIL_USER and EMAIL_PASSWORD in Render environment variables")
+        return False
+    except smtplib.SMTPConnectError as e:
+        print(f"[EMAIL] ERROR: Could not connect to SMTP server - {e}")
+        print(f"[EMAIL] Check EMAIL_HOST and EMAIL_PORT settings")
+        return False
     except Exception as e:
-        print(f"Email sending failed: {e}")
+        print(f"[EMAIL] ERROR: Unexpected error - {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # --- ROUTES ---
@@ -358,63 +389,81 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
 
 @app.post("/auth/request-password-reset")
 async def request_password_reset(req: RequestPasswordResetRequest, db: Session = Depends(database.get_db)):
-    """Step 1: Request password reset - sends email with secure token."""
+    """Step 1: Request password reset - sends email with 6-digit code."""
     user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user:
         # Don't reveal if email exists for security
-        return {"success": True, "message": "If email exists, reset link will be sent"}
-    
-    # Generate secure token
-    token = generate_reset_token()
+        return {"success": True, "message": "If email exists, verification code will be sent"}
+
+    # Generate 6-digit code
+    code = generate_reset_code()
     expires_at = datetime.utcnow() + timedelta(minutes=30)
-    
-    # Invalidate any existing tokens for this email
+
+    # Invalidate any existing codes for this email
     db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
-    
-    # Create new password reset record
+
+    # Create new password reset record with code
     reset_record = models.PasswordReset(
         email=req.email,
-        token=token,
+        code=code,
+        token=generate_reset_token(),  # Backup token for future use
         expires_at=expires_at,
         used=False
     )
     db.add(reset_record)
     db.commit()
-    
-    # Send email with reset link
-    email_sent = send_password_reset_email(req.email, token)
-    
-    if email_sent:
-        return {"success": True, "message": "Password reset link sent to your email"}
-    else:
-        return {"success": False, "message": "Failed to send reset email. Please try again."}
 
-@app.post("/auth/confirm-password-reset")
-async def confirm_password_reset(req: ConfirmPasswordResetRequest, db: Session = Depends(database.get_db)):
-    """Step 2: Confirm password reset - verifies token and updates password."""
-    # Find valid token
+    # Send email with verification code
+    email_sent = send_password_reset_email(req.email, code)
+
+    if email_sent:
+        return {"success": True, "message": "Verification code sent to your email"}
+    else:
+        return {"success": False, "message": "Failed to send verification email. Please try again."}
+
+@app.post("/auth/verify-reset-code")
+async def verify_reset_code(req: VerifyCodeRequest, db: Session = Depends(database.get_db)):
+    """Step 2: Verify the 6-digit code."""
+    # Find valid code
     reset_record = db.query(models.PasswordReset).filter(
-        models.PasswordReset.token == req.token,
+        models.PasswordReset.email == req.email,
+        models.PasswordReset.code == req.code,
         models.PasswordReset.used == False,
         models.PasswordReset.expires_at > datetime.utcnow()
     ).first()
-    
+
     if not reset_record:
-        return {"success": False, "message": "Invalid or expired reset token"}
-    
+        return {"success": False, "message": "Invalid or expired verification code"}
+
+    return {"success": True, "message": "Code verified successfully"}
+
+@app.post("/auth/confirm-password-reset")
+async def confirm_password_reset(req: ConfirmPasswordResetRequest, db: Session = Depends(database.get_db)):
+    """Step 3: Confirm password reset - verifies code and updates password."""
+    # Find valid code
+    reset_record = db.query(models.PasswordReset).filter(
+        models.PasswordReset.email == req.email,
+        models.PasswordReset.code == req.code,
+        models.PasswordReset.used == False,
+        models.PasswordReset.expires_at > datetime.utcnow()
+    ).first()
+
+    if not reset_record:
+        return {"success": False, "message": "Invalid or expired verification code"}
+
     # Find user
-    user = db.query(models.User).filter(models.User.email == reset_record.email).first()
+    user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user:
         return {"success": False, "message": "User not found"}
-    
+
     # Update password
     user.password_hash = get_password_hash(req.new_password)
-    
-    # Mark token as used
+
+    # Mark code as used
     reset_record.used = True
-    
+
     db.commit()
-    
+
     return {"success": True, "message": "Password reset successfully"}
 
 @app.get("/user/profile")
