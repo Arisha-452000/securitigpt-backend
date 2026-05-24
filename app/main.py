@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 import httpx
 import asyncio
 import base64
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from openai import AsyncOpenAI
 
 from . import models, database, config
@@ -208,6 +212,9 @@ class PasswordChangeRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str
+
+class ResetPasswordConfirmRequest(BaseModel):
+    token: str
     new_password: str
 
 class ChatRequest(BaseModel):
@@ -302,14 +309,109 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
     db.commit()
     return {"success": True, "message": "Password updated successfully"}
 
-@app.post("/auth/reset-password")
-async def reset_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
+def send_reset_email(email: str, token: str):
+    """Send password reset email with token"""
+    try:
+        reset_link = f"{config.FRONTEND_URL}/reset-password?token={token}"
+
+        msg = MIMEMultipart()
+        msg['From'] = config.SMTP_EMAIL
+        msg['To'] = email
+        msg['Subject'] = 'Password Reset - Securiti GPT'
+
+        body = f"""
+        <html>
+        <body>
+            <h2>Password Reset Request</h2>
+            <p>You requested a password reset for your Securiti GPT account.</p>
+            <p>Click the link below to reset your password:</p>
+            <p><a href="{reset_link}">{reset_link}</a></p>
+            <p>This link will expire in 1 hour.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+        </body>
+        </html>
+        """
+
+        msg.attach(MIMEText(body, 'html'))
+
+        # Use SSL for Hostinger (port 465)
+        if config.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT) as server:
+                server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            # Use STARTTLS for other ports (e.g., 587)
+            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT) as server:
+                server.starttls()
+                server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
+                server.send_message(msg)
+
+        return True
+    except Exception as e:
+        print(f"Email sending failed: {e}")
+        return False
+
+@app.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
+    """Step 1: Request password reset - generates token and sends email"""
     user = db.query(models.User).filter(models.User.email == req.email).first()
-    if not user:
-        return {"success": False, "message": "Email not found"}
     
-    user.password_hash = get_password_hash(req.new_password)
+    # Always return success to prevent email enumeration
+    if not user:
+        return {"success": True, "message": "If email exists, reset link sent"}
+    
+    # Generate secure token
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=1)
+    
+    # Invalidate old tokens for this email
+    db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
+    
+    # Create new reset token
+    reset_entry = models.PasswordReset(
+        email=req.email,
+        token=token,
+        expires_at=expires_at,
+        used=False
+    )
+    db.add(reset_entry)
     db.commit()
+    
+    # Send email
+    email_sent = send_reset_email(req.email, token)
+    
+    if not email_sent:
+        # For development: return token in response if email fails
+        return {"success": True, "message": "Email service not configured", "debug_token": token}
+    
+    return {"success": True, "message": "Password reset link sent to email"}
+
+@app.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordConfirmRequest, db: Session = Depends(database.get_db)):
+    """Step 2: Confirm password reset with token"""
+    # Find valid token
+    reset_entry = db.query(models.PasswordReset).filter(
+        models.PasswordReset.token == req.token,
+        models.PasswordReset.used == False,
+        models.PasswordReset.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not reset_entry:
+        return {"success": False, "message": "Invalid or expired token"}
+    
+    # Find user
+    user = db.query(models.User).filter(models.User.email == reset_entry.email).first()
+    if not user:
+        return {"success": False, "message": "User not found"}
+    
+    # Update password
+    user.password_hash = get_password_hash(req.new_password)
+    
+    # Mark token as used
+    reset_entry.used = True
+    
+    db.commit()
+    
     return {"success": True, "message": "Password reset successfully"}
 
 @app.get("/user/profile")
