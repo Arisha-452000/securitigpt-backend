@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 import httpx
 import asyncio
 import base64
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from openai import AsyncOpenAI
 
 from . import models, database, config
@@ -208,6 +212,12 @@ class PasswordChangeRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str
+
+class RequestPasswordResetRequest(BaseModel):
+    email: str
+
+class ConfirmPasswordResetRequest(BaseModel):
+    token: str
     new_password: str
 
 class ChatRequest(BaseModel):
@@ -258,6 +268,50 @@ def require_credits(cost: int):
         return user
     return credit_checker
 
+# --- PASSWORD RESET HELPER FUNCTIONS ---
+def generate_reset_token():
+    """Generate a secure random token for password reset."""
+    return secrets.token_urlsafe(32)
+
+def send_password_reset_email(email: str, token: str):
+    """Send password reset email with the token."""
+    try:
+        # Create reset link
+        reset_link = f"{config.FRONTEND_URL}/reset-password?token={token}"
+        
+        # Create email message
+        message = MIMEMultipart("alternative")
+        message["Subject"] = "Password Reset Request - CyberGuard"
+        message["From"] = config.EMAIL_FROM
+        message["To"] = email
+        
+        # Email body
+        html = f"""
+        <html>
+        <body>
+            <h2>Password Reset Request</h2>
+            <p>You requested a password reset for your CyberGuard account.</p>
+            <p>Click the link below to reset your password:</p>
+            <p><a href="{reset_link}">{reset_link}</a></p>
+            <p>This link will expire in 30 minutes.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+            <p><strong>Security Note:</strong> Never share this link with anyone.</p>
+        </body>
+        </html>
+        """
+        
+        message.attach(MIMEText(html, "html"))
+        
+        # Send email using SSL for Hostinger (port 465)
+        with smtplib.SMTP_SSL(config.EMAIL_HOST, config.EMAIL_PORT) as server:
+            server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
+            server.sendmail(config.EMAIL_FROM, email, message.as_string())
+        
+        return True
+    except Exception as e:
+        print(f"Email sending failed: {e}")
+        return False
+
 # --- ROUTES ---
 @app.post("/auth/signup")
 def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
@@ -302,14 +356,65 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
     db.commit()
     return {"success": True, "message": "Password updated successfully"}
 
-@app.post("/auth/reset-password")
-async def reset_password(req: ForgotPasswordRequest, db: Session = Depends(database.get_db)):
+@app.post("/auth/request-password-reset")
+async def request_password_reset(req: RequestPasswordResetRequest, db: Session = Depends(database.get_db)):
+    """Step 1: Request password reset - sends email with secure token."""
     user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user:
-        return {"success": False, "message": "Email not found"}
+        # Don't reveal if email exists for security
+        return {"success": True, "message": "If email exists, reset link will be sent"}
     
-    user.password_hash = get_password_hash(req.new_password)
+    # Generate secure token
+    token = generate_reset_token()
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    
+    # Invalidate any existing tokens for this email
+    db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
+    
+    # Create new password reset record
+    reset_record = models.PasswordReset(
+        email=req.email,
+        token=token,
+        expires_at=expires_at,
+        used=False
+    )
+    db.add(reset_record)
     db.commit()
+    
+    # Send email with reset link
+    email_sent = send_password_reset_email(req.email, token)
+    
+    if email_sent:
+        return {"success": True, "message": "Password reset link sent to your email"}
+    else:
+        return {"success": False, "message": "Failed to send reset email. Please try again."}
+
+@app.post("/auth/confirm-password-reset")
+async def confirm_password_reset(req: ConfirmPasswordResetRequest, db: Session = Depends(database.get_db)):
+    """Step 2: Confirm password reset - verifies token and updates password."""
+    # Find valid token
+    reset_record = db.query(models.PasswordReset).filter(
+        models.PasswordReset.token == req.token,
+        models.PasswordReset.used == False,
+        models.PasswordReset.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not reset_record:
+        return {"success": False, "message": "Invalid or expired reset token"}
+    
+    # Find user
+    user = db.query(models.User).filter(models.User.email == reset_record.email).first()
+    if not user:
+        return {"success": False, "message": "User not found"}
+    
+    # Update password
+    user.password_hash = get_password_hash(req.new_password)
+    
+    # Mark token as used
+    reset_record.used = True
+    
+    db.commit()
+    
     return {"success": True, "message": "Password reset successfully"}
 
 @app.get("/user/profile")
