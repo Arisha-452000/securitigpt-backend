@@ -30,7 +30,8 @@ class PasswordReset(Base):
     __tablename__ = "password_resets"
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, index=True)
-    token = Column(String, unique=True, index=True)
+    code = Column(String, index=True)  # 6-digit code
+    token = Column(String, unique=True, index=True)  # For backup/link method
     expires_at = Column(DateTime)
     used = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
