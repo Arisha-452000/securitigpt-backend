@@ -14,3 +14,10 @@ VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "ca2944957a797da80ad4a
 HIBP_API_KEY = os.environ.get("HIBP_API_KEY", "mock_key_needed_only_if_unmocked")
 RAPID_API_KEY = os.environ.get("RAPID_API_KEY", "")
 
+# Email Configuration for Password Reset
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.hostinger.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "contact@securitigpt.com")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://securitigpt.com")
+
