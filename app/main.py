@@ -58,17 +58,6 @@ async def startup_event():
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
                 print("Migration: Added is_admin column")
 
-            # Check if password_resets table exists and add code column if missing
-            try:
-                inspector = inspect(database.engine)
-                if 'password_resets' in inspector.get_table_names():
-                    pr_columns = [col['name'] for col in inspector.get_columns('password_resets')]
-                    if 'code' not in pr_columns:
-                        conn.execute(text("ALTER TABLE password_resets ADD COLUMN code VARCHAR"))
-                        print("Migration: Added code column to password_resets")
-            except Exception as e:
-                print(f"Migration check for password_resets failed: {e}")
-
             conn.commit()
 
         init_admin()
