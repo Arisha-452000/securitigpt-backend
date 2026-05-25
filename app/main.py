@@ -390,36 +390,50 @@ async def change_password(req: PasswordChangeRequest, db: Session = Depends(data
 @app.post("/auth/request-password-reset")
 async def request_password_reset(req: RequestPasswordResetRequest, db: Session = Depends(database.get_db)):
     """Step 1: Request password reset - sends email with 6-digit code."""
-    user = db.query(models.User).filter(models.User.email == req.email).first()
-    if not user:
-        # Don't reveal if email exists for security
-        return {"success": True, "message": "If email exists, verification code will be sent"}
+    try:
+        print(f"[PASSWORD RESET] Request received for email: {req.email}")
 
-    # Generate 6-digit code
-    code = generate_reset_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=30)
+        user = db.query(models.User).filter(models.User.email == req.email).first()
+        if not user:
+            # Don't reveal if email exists for security
+            print(f"[PASSWORD RESET] Email not found: {req.email}")
+            return {"success": True, "message": "If email exists, verification code will be sent"}
 
-    # Invalidate any existing codes for this email
-    db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
+        # Generate 6-digit code
+        code = generate_reset_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=30)
 
-    # Create new password reset record with code
-    reset_record = models.PasswordReset(
-        email=req.email,
-        code=code,
-        token=generate_reset_token(),  # Backup token for future use
-        expires_at=expires_at,
-        used=False
-    )
-    db.add(reset_record)
-    db.commit()
+        print(f"[PASSWORD RESET] Generated code: {code} for email: {req.email}")
 
-    # Send email with verification code
-    email_sent = send_password_reset_email(req.email, code)
+        # Invalidate any existing codes for this email
+        db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).update({models.PasswordReset.used: True})
 
-    if email_sent:
-        return {"success": True, "message": "Verification code sent to your email"}
-    else:
-        return {"success": False, "message": "Failed to send verification email. Please try again."}
+        # Create new password reset record with code
+        reset_record = models.PasswordReset(
+            email=req.email,
+            code=code,
+            token=generate_reset_token(),  # Backup token for future use
+            expires_at=expires_at,
+            used=False
+        )
+        db.add(reset_record)
+        db.commit()
+        print(f"[PASSWORD RESET] Code stored in database")
+
+        # Send email with verification code
+        email_sent = send_password_reset_email(req.email, code)
+
+        if email_sent:
+            print(f"[PASSWORD RESET] Email sent successfully to: {req.email}")
+            return {"success": True, "message": "Verification code sent to your email"}
+        else:
+            print(f"[PASSWORD RESET] Failed to send email to: {req.email}")
+            return {"success": False, "message": "Failed to send verification email. Please try again."}
+    except Exception as e:
+        print(f"[PASSWORD RESET] ERROR: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "message": f"System error: {str(e)}"}
 
 @app.post("/auth/verify-reset-code")
 async def verify_reset_code(req: VerifyCodeRequest, db: Session = Depends(database.get_db)):
