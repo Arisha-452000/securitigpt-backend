@@ -557,7 +557,15 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
                         pass
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(), 
+            media_type="text/event-stream", 
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()
