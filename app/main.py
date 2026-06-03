@@ -522,30 +522,42 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
             db.commit()
             print(f"After deduction - User: {user.email}, Credits: {user.credits}")
 
-        # Using MASTER_PROMPT as system message for production-level AI behavior
+        import json
+        from fastapi.responses import StreamingResponse
+
         prompt = [
             {"role": "system", "content": MASTER_PROMPT},
             {"role": "user", "content": req.message}
         ]
         
-        try:
-            response = await openai_client.chat.completions.create(
-                model="gpt-4o-mini", 
-                messages=prompt, 
-                temperature=0.7, 
-                max_tokens=2000   # Increased for deeper answers
-            )
-            reply = response.choices[0].message.content
-            remaining_credits = user.credits if user else None
-            return {"success": True, "message": "Chat generated", "data": {"reply": reply, "credits_remaining": remaining_credits}}
-        except Exception as e:
-            # Refund credits on error for logged-in users
-            import traceback
-            traceback.print_exc()
-            if user:
-                user.credits += 5
-                db.commit()
-            return {"success": False, "message": f"OpenAI Error: {str(e)}"}
+        async def event_stream():
+            try:
+                response = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini", 
+                    messages=prompt, 
+                    temperature=0.7, 
+                    max_tokens=2000,
+                    stream=True
+                )
+                async for chunk in response:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield f"data: {json.dumps({'chunk': content})}\n\n"
+                
+                remaining_credits = user.credits if user else None
+                yield f"data: {json.dumps({'done': True, 'credits_remaining': remaining_credits})}\n\n"
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                if user:
+                    try:
+                        user.credits += 5
+                        db.commit()
+                    except:
+                        pass
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
     except Exception as e:
         import traceback
         traceback.print_exc()
