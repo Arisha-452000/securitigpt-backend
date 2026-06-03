@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
@@ -52,12 +53,12 @@ async def startup_event():
             if 'full_name' not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR"))
                 print("Migration: Added full_name column")
-
+            
             if 'is_admin' not in columns:
                 # Use a specific syntax for boolean default that works across most dialects
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
                 print("Migration: Added is_admin column")
-
+            
             conn.commit()
 
         init_admin()
@@ -529,17 +530,37 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
         ]
         
         try:
-            response = await openai_client.chat.completions.create(
-                model="gpt-4o-mini", 
-                messages=prompt, 
-                temperature=0.7, 
-                max_tokens=2000   # Increased for deeper answers
-            )
-            reply = response.choices[0].message.content
-            remaining_credits = user.credits if user else None
-            return {"success": True, "message": "Chat generated", "data": {"reply": reply, "credits_remaining": remaining_credits}}
+            async def event_stream():
+                try:
+                    stream = await openai_client.chat.completions.create(
+                        model="gpt-4o-mini", 
+                        messages=prompt, 
+                        temperature=0.7, 
+                        max_tokens=2000,
+                        stream=True
+                    )
+                    import json
+                    async for chunk in stream:
+                        content = chunk.choices[0].delta.content
+                        if content is not None:
+                            data = json.dumps({"text": content})
+                            yield f"data: {data}\n\n"
+                    
+                    remaining = user.credits if user else None
+                    final_data = json.dumps({"done": True, "credits_remaining": remaining})
+                    yield f"data: {final_data}\n\n"
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    if user:
+                        user.credits += 5
+                        db.commit()
+                    import json
+                    error_data = json.dumps({"error": str(e)})
+                    yield f"data: {error_data}\n\n"
+            
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
         except Exception as e:
-            # Refund credits on error for logged-in users
             import traceback
             traceback.print_exc()
             if user:
