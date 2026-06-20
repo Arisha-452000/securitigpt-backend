@@ -1,5 +1,8 @@
 import os
+from dotenv import load_dotenv
 
+# Load environment variables from a .env file if it exists
+load_dotenv()
 # Security - Use environment variables in production, fallback to hardcoded for local dev
 SECRET_KEY = os.environ.get("SECRET_KEY", "securitigpt_production_ready_secret_key_123!")
 ALGORITHM = "HS256"
