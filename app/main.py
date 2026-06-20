@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 from . import models, database, config
 
 # Models are now initialized in the @app.on_event("startup") event below
-app = FastAPI(title="CyberGuard Unified Backend")
+app = FastAPI(title="SecuritiGPT Unified Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,7 +67,7 @@ async def startup_event():
 
 @app.get("/")
 def read_root():
-    return {"success": True, "message": "CyberGuard Unified Backend API is Live"}
+    return {"success": True, "message": "SecuritiGPT Unified Backend API is Live"}
 
 @app.get("/health")
 @app.head("/health")
@@ -288,7 +288,7 @@ def send_password_reset_email(email: str, code: str):
     try:
         # Create email message
         message = MIMEMultipart("alternative")
-        message["Subject"] = "Password Reset Code - CyberGuard"
+        message["Subject"] = "Password Reset Code - SecuritiGPT"
         message["From"] = config.EMAIL_FROM
         message["To"] = email
 
@@ -297,7 +297,7 @@ def send_password_reset_email(email: str, code: str):
         <html>
         <body>
             <h2>Password Reset Request</h2>
-            <p>You requested a password reset for your CyberGuard account.</p>
+            <p>You requested a password reset for your SecuritiGPT account.</p>
             <p>Your verification code is:</p>
             <h1 style="color: #0066cc; font-size: 32px; letter-spacing: 5px;">{code}</h1>
             <p>This code will expire in 30 minutes.</p>
