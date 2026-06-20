@@ -2,6 +2,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Email Configuration (same as config.py)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.hostinger.com")
