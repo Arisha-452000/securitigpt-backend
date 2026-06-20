@@ -24,4 +24,5 @@ EMAIL_USER = os.environ.get("EMAIL_USER", "contact@securitigpt.com")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "contact@securitigpt.com")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://securitigpt.com")
-
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
