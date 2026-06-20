@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
 from pydantic import BaseModel
@@ -373,7 +374,61 @@ def login(req: AuthRequest, db: Session = Depends(database.get_db)):
     token = create_access_token({"sub": user.email})
     is_admin = bool(user.is_admin)
     print(f"LOGIN DEBUG: User {user.email} logged in. is_admin: {is_admin}")
-    return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": is_admin}}
+    return {"success": True, "message": "Login successful", "data": {"access_token": token, "is_admin": is_admin, "credits": user.credits, "full_name": user.full_name}}
+
+@app.get("/auth/google/login")
+async def google_login():
+    redirect_uri = "https://api.securitigpt.com/auth/google/callback"
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={config.GOOGLE_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code&scope=email profile"
+    return RedirectResponse(url)
+
+@app.get("/auth/google/callback")
+async def google_callback(code: str, db: Session = Depends(database.get_db)):
+    token_url = "https://oauth2.googleapis.com/token"
+    redirect_uri = "https://api.securitigpt.com/auth/google/callback"
+    data = {
+        "client_id": config.GOOGLE_CLIENT_ID,
+        "client_secret": config.GOOGLE_CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect_uri
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(token_url, data=data)
+            access_token = response.json().get("access_token")
+            
+            if not access_token:
+                return RedirectResponse(f"{config.FRONTEND_URL}/login.html?error=google_auth_failed")
+                
+            user_info_response = await client.get("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+            user_info = user_info_response.json()
+            
+        email = user_info.get("email")
+        name = user_info.get("name", "")
+        
+        if not email:
+            return RedirectResponse(f"{config.FRONTEND_URL}/login.html?error=no_email")
+            
+        user = db.query(models.User).filter(models.User.email == email).first()
+        if not user:
+            user = models.User(email=email, full_name=name, password_hash="google_oauth_no_pass", credits=100)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+        token = create_access_token({"sub": user.email})
+        is_admin = bool(user.is_admin)
+        
+        frontend_url = config.FRONTEND_URL
+        import urllib.parse
+        encoded_name = urllib.parse.quote(name)
+        
+        return RedirectResponse(f"{frontend_url}/login.html?token={token}&email={email}&name={encoded_name}&is_admin={str(is_admin).lower()}&credits={user.credits}")
+    except Exception as e:
+        print(f"Google Callback Error: {e}")
+        return RedirectResponse(f"{config.FRONTEND_URL}/login.html?error=system_error")
 
 @app.post("/auth/change-password")
 async def change_password(req: PasswordChangeRequest, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
