@@ -660,7 +660,25 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
-            # Step 1: Always submit for a new/refreshed scan (ensures latest data)
+            # Fast Path: Try to get existing analysis first
+            import base64
+            url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
+            
+            res = await client.get(
+                f"https://www.virustotal.com/api/v3/urls/{url_id}",
+                headers=headers
+            )
+            
+            if res.status_code == 200:
+                data_attr = res.json().get("data", {}).get("attributes", {})
+                stats = data_attr.get("last_analysis_stats", {})
+                results = data_attr.get("last_analysis_results", {})
+                
+                # If we have valid stats, return immediately
+                if sum(stats.values()) > 0:
+                    return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
+            
+            # Slow Path: If no existing analysis, submit for a new scan
             submit_res = await client.post(
                 "https://www.virustotal.com/api/v3/urls", 
                 headers=headers, 
@@ -674,8 +692,8 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Step 2: Poll for completion (robust longer wait)
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers)
+            # Poll for completion with faster initial polling
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=15, delay=2)
             
             return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
     except Exception as e:
