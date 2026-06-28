@@ -827,7 +827,19 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
         async with httpx.AsyncClient() as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
-            # Step 1: Submit file to VT
+            import hashlib
+            file_hash = hashlib.sha256(contents).hexdigest()
+            
+            # Fast Path: Check if VT already knows this file hash
+            res = await client.get(f"https://www.virustotal.com/api/v3/files/{file_hash}", headers=headers)
+            if res.status_code == 200:
+                data_attr = res.json().get("data", {}).get("attributes", {})
+                stats = data_attr.get("last_analysis_stats", {})
+                results = data_attr.get("last_analysis_results", {})
+                if sum(stats.values()) > 0:
+                    return {"success": True, "message": "File Hash Analyzed Instantly", "data": {"stats": stats, "results": results, "status": "completed"}}
+            
+            # Slow Path: Upload file to VT
             files = {"file": (file.filename, contents)}
             submit_res = await client.post(
                 "https://www.virustotal.com/api/v3/files", 
@@ -843,8 +855,8 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
             if not analysis_id:
                 return {"success": False, "message": "Failed to retrieve analysis ID from VirusTotal."}
             
-            # Step 2: Poll for results (robust longer wait)
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers)
+            # Poll for results quickly
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=3, delay=1)
             
             return {"success": True, "message": "File Analyzed", "data": {"stats": stats, "results": results, "status": status}}
 
