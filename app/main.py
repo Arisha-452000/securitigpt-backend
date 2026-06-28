@@ -692,8 +692,8 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Poll for completion with faster initial polling
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=15, delay=2)
+            # Poll for completion quickly, don't freeze the user for 30s
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=3, delay=1)
             
             return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
     except Exception as e:
