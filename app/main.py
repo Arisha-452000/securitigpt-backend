@@ -375,35 +375,40 @@ def send_signup_verification_email(email: str, code: str):
             server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
             server.sendmail(config.EMAIL_FROM, email, message.as_string())
 
-        return True
+        return "success"
     except Exception as e:
-        print(f"[EMAIL] ERROR sending signup email: {e}")
-        return False
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f"[EMAIL] ERROR sending signup email: {error_msg}")
+        return error_msg
 
 # --- ROUTES ---
 @app.post("/auth/request-signup-code")
 async def request_signup_code(req: RequestPasswordResetRequest, db: Session = Depends(database.get_db)):
-    if db.query(models.User).filter(models.User.email == req.email).first():
-        return {"success": False, "message": "Email already registered"}
-    
-    code = generate_reset_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=30)
-    
-    db.query(models.SignupVerification).filter(models.SignupVerification.email == req.email).update({models.SignupVerification.used: True})
-    
-    verification = models.SignupVerification(
-        email=req.email,
-        code=code,
-        expires_at=expires_at,
-        used=False
-    )
-    db.add(verification)
-    db.commit()
-    
-    if send_signup_verification_email(req.email, code):
-        return {"success": True, "message": "Verification code sent to your email"}
-    else:
-        return {"success": False, "message": "Failed to send verification email. Please try again."}
+    try:
+        if db.query(models.User).filter(models.User.email == req.email).first():
+            return {"success": False, "message": "Email already registered"}
+        
+        code = generate_reset_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=30)
+        
+        db.query(models.SignupVerification).filter(models.SignupVerification.email == req.email).update({models.SignupVerification.used: True})
+        
+        verification = models.SignupVerification(
+            email=req.email,
+            code=code,
+            expires_at=expires_at,
+            used=False
+        )
+        db.add(verification)
+        db.commit()
+        
+        email_result = send_signup_verification_email(req.email, code)
+        if email_result == "success":
+            return {"success": True, "message": "Verification code sent to your email"}
+        else:
+            return {"success": False, "message": f"SMTP Error: {email_result}"}
+    except Exception as e:
+        return {"success": False, "message": f"Database or Server Error: {type(e).__name__} - {str(e)}"}
 
 @app.post("/auth/signup")
 def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
