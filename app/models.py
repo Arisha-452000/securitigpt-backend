@@ -44,3 +44,13 @@ class SignupVerification(Base):
     expires_at = Column(DateTime)
     used = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class Blog(Base):
+    __tablename__ = "blogs"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String)
+    category = Column(String)
+    image = Column(String)
+    content = Column(String)  # This will store the rich text HTML
+    author = Column(String)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
