@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from .database import Base
 
 class User(Base):
@@ -51,6 +51,6 @@ class Blog(Base):
     title = Column(String)
     category = Column(String)
     image = Column(String)
-    content = Column(String)  # This will store the rich text HTML
+    content = Column(Text)  # This will store the rich text HTML
     author = Column(String)
     date = Column(DateTime, default=datetime.datetime.utcnow)
