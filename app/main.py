@@ -239,6 +239,13 @@ class ToolRequest(BaseModel):
 class BroadcastRequest(BaseModel):
     message: str
 
+class BlogCreateRequest(BaseModel):
+    title: str
+    category: str
+    image: Optional[str] = None
+    content: str
+    author: str
+
 # --- DEPENDENCIES ---
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -445,6 +452,39 @@ def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
     is_admin = bool(user.is_admin)
     print(f"SIGNUP DEBUG: User {user.email} created. is_admin: {is_admin}")
     return {"success": True, "message": "Account created successfully", "data": {"access_token": token, "is_admin": is_admin}}
+
+@app.get("/blogs")
+def get_blogs(db: Session = Depends(database.get_db)):
+    blogs = db.query(models.Blog).order_by(models.Blog.date.desc()).all()
+    return {"success": True, "data": blogs}
+
+@app.post("/admin/blogs")
+def create_blog(req: BlogCreateRequest, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    blog = models.Blog(
+        title=req.title,
+        category=req.category,
+        image=req.image,
+        content=req.content,
+        author=req.author
+    )
+    db.add(blog)
+    db.commit()
+    db.refresh(blog)
+    return {"success": True, "data": blog}
+
+@app.delete("/admin/blogs/{blog_id}")
+def delete_blog(blog_id: int, db: Session = Depends(database.get_db), user: models.User = Depends(get_current_user)):
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    blog = db.query(models.Blog).filter(models.Blog.id == blog_id).first()
+    if blog:
+        db.delete(blog)
+        db.commit()
+    return {"success": True, "message": "Blog deleted"}
 
 @app.post("/auth/login")
 def login(req: AuthRequest, db: Session = Depends(database.get_db)):
