@@ -207,6 +207,7 @@ class AuthRequest(BaseModel):
     email: str
     password: str
     full_name: Optional[str] = None
+    verification_code: Optional[str] = None
 
 class PasswordChangeRequest(BaseModel):
     old_password: str
@@ -344,11 +345,86 @@ def send_password_reset_email(email: str, code: str):
         traceback.print_exc()
         return False
 
+def send_signup_verification_email(email: str, code: str):
+    """Send signup verification email with the code."""
+    try:
+        message = MIMEMultipart("alternative")
+        message["Subject"] = "Verify your email - SecuritiGPT"
+        message["From"] = config.EMAIL_FROM
+        message["To"] = email
+
+        html = f"""
+        <html>
+        <body>
+            <h2>Welcome to SecuritiGPT!</h2>
+            <p>Please verify your email address to complete your registration.</p>
+            <p>Your verification code is:</p>
+            <h1 style="color: #00d4b1; font-size: 32px; letter-spacing: 5px;">{code}</h1>
+            <p>This code will expire in 30 minutes.</p>
+        </body>
+        </html>
+        """
+
+        message.attach(MIMEText(html, "html"))
+
+        if not config.EMAIL_PASSWORD:
+            print("[EMAIL] ERROR: EMAIL_PASSWORD environment variable is not set!")
+            return False
+
+        with smtplib.SMTP_SSL(config.EMAIL_HOST, config.EMAIL_PORT) as server:
+            server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
+            server.sendmail(config.EMAIL_FROM, email, message.as_string())
+
+        return True
+    except Exception as e:
+        print(f"[EMAIL] ERROR sending signup email: {e}")
+        return False
+
 # --- ROUTES ---
-@app.post("/auth/signup")
-def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
+@app.post("/auth/request-signup-code")
+async def request_signup_code(req: RequestPasswordResetRequest, db: Session = Depends(database.get_db)):
     if db.query(models.User).filter(models.User.email == req.email).first():
         return {"success": False, "message": "Email already registered"}
+    
+    code = generate_reset_code()
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    
+    db.query(models.SignupVerification).filter(models.SignupVerification.email == req.email).update({models.SignupVerification.used: True})
+    
+    verification = models.SignupVerification(
+        email=req.email,
+        code=code,
+        expires_at=expires_at,
+        used=False
+    )
+    db.add(verification)
+    db.commit()
+    
+    if send_signup_verification_email(req.email, code):
+        return {"success": True, "message": "Verification code sent to your email"}
+    else:
+        return {"success": False, "message": "Failed to send verification email. Please try again."}
+
+@app.post("/auth/signup")
+def signup(req: AuthRequest, db: Session = Depends(database.get_db)):
+    if not req.verification_code:
+        return {"success": False, "message": "Verification code is required"}
+        
+    verification = db.query(models.SignupVerification).filter(
+        models.SignupVerification.email == req.email,
+        models.SignupVerification.code == req.verification_code,
+        models.SignupVerification.used == False,
+        models.SignupVerification.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not verification:
+        return {"success": False, "message": "Invalid or expired verification code"}
+        
+    if db.query(models.User).filter(models.User.email == req.email).first():
+        return {"success": False, "message": "Email already registered"}
+    
+    # Mark code as used
+    verification.used = True
     
     user = models.User(
         email=req.email, 
