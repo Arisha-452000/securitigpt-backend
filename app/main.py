@@ -84,11 +84,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 def init_admin():
     db = database.SessionLocal()
     try:
-        admins = [
-            ("abdullah@securitigpt.com", "A.452004!"),
-            ("arisha@securitigpt.com", "A.a452004!")
-        ]
-        # First, reset is_admin for everyone to ensure we exactly manage our 2 admins
+        admins = []
+        if config.ADMIN_EMAIL and config.ADMIN_PASSWORD:
+            admins.append((config.ADMIN_EMAIL, config.ADMIN_PASSWORD))
+        
+        # First, reset is_admin for everyone to ensure we exactly manage our 1 admins
         db.query(models.User).update({models.User.is_admin: False})
         
         for email, password in admins:
