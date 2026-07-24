@@ -9,21 +9,21 @@ models.Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 try:
     # Check if admin already exists
-    existing_admin = db.query(models.User).filter(models.User.email == "admin@securitigpt.com").first()
+    existing_admin = db.query(models.User).filter(models.User.email == "abdullah@securitigpt.com").first()
     if existing_admin:
         print("Admin user already exists!")
     else:
         # Create admin user
         admin_user = models.User(
-            email="admin@securitigpt.com",
-            password_hash=get_password_hash("admin123"),
+            email="abdullah@securitigpt.com",
+            password_hash=get_password_hash("Isb2005!\\"),
             credits=999999
         )
         db.add(admin_user)
         db.commit()
         print("Admin user created successfully!")
-        print("Email: admin@securitigpt.com")
-        print("Password: admin123")
+        print("Email: abdullah@securitigpt.com")
+        print("Password: Isb2005!\\")
     
     # List all users
     users = db.query(models.User).all()
