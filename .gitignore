@@ -1,0 +1,29 @@
+# Environment & Secrets (OpenAI API Key, Email Passwords, Secrets)
+.env
+.env.*
+*.env
+backend/.env
+
+# Databases & Dump files (PostgreSQL / SQLite dumps)
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+securitigpt.db
+cyberai.db
+
+# Python & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+venv/
+env/
+
+# IDE & OS temporary files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
