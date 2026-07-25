@@ -17,8 +17,24 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from openai import AsyncOpenAI
+import time
 
 from . import models, database, config
+
+# --- IN-MEMORY VT RESULT CACHE (TTL: 1 hour) ---
+_vt_cache: dict = {}
+CACHE_TTL = 3600  # seconds
+
+def _cache_get(key: str):
+    entry = _vt_cache.get(key)
+    if entry and (time.time() - entry["ts"]) < CACHE_TTL:
+        return entry["data"]
+    if entry:
+        del _vt_cache[key]
+    return None
+
+def _cache_set(key: str, data: dict):
+    _vt_cache[key] = {"ts": time.time(), "data": data}
 
 # Models are now initialized in the @app.on_event("startup") event below
 app = FastAPI(title="SecuritiGPT Unified Backend")
@@ -778,28 +794,33 @@ async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers:
 async def phishing_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
     if not req.url: return {"success": False, "message": "URL required"}
     try:
+        # 1) Check local cache first — instant, no VT call needed
+        cached = _cache_get(f"url:{req.url}")
+        if cached:
+            return {"success": True, "message": "URL Analyzed (cached)", "data": cached}
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            import base64
             url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
 
-            # Fast Path: already cached in VT — instant return
+            # 2) Fast Path: VT already has this URL cached
             res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
             if res.status_code == 200:
                 data_attr = res.json().get("data", {}).get("attributes", {})
                 stats = data_attr.get("last_analysis_stats", {})
                 results = data_attr.get("last_analysis_results", {})
                 if sum(stats.values()) > 0:
-                    return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
+                    result_data = {"stats": stats, "results": results, "status": "completed"}
+                    _cache_set(f"url:{req.url}", result_data)  # store in local cache
+                    return {"success": True, "message": "URL Analyzed", "data": result_data}
 
-            # Slow Path: submit new scan, return analysis_id immediately
+            # 3) Slow Path: submit new scan, return analysis_id for frontend polling
             submit_res = await client.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": req.url})
             if submit_res.status_code != 200:
                 return {"success": False, "message": f"VT Error: {submit_res.status_code}"}
             analysis_id = submit_res.json().get("data", {}).get("id")
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
-            # Return immediately — frontend will poll /tools/virus-status/{id}
             return {"success": True, "message": "Scan submitted", "data": {"status": "scanning", "analysis_id": analysis_id}}
     except Exception as e:
         return {"success": False, "message": f"Connection error: {str(e)}"}
@@ -819,7 +840,9 @@ async def virus_check(req: ToolRequest, user: models.User = Depends(require_cred
                     data_attr = res.json().get("data", {}).get("attributes", {})
                     stats = data_attr.get("last_analysis_stats", {})
                     results = data_attr.get("last_analysis_results", {})
-                    return {"success": True, "message": "File Hash Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
+                    result_data = {"stats": stats, "results": results, "status": "completed"}
+                    _cache_set(f"hash:{input_data}", result_data)
+                    return {"success": True, "message": "File Hash Analyzed", "data": result_data}
                 return {"success": False, "message": f"Hash not found (Error: {res.status_code})"}
             else:
                 # URL scan — delegate, will return analysis_id if new
@@ -829,9 +852,13 @@ async def virus_check(req: ToolRequest, user: models.User = Depends(require_cred
 
 @app.get("/tools/virus-status/{analysis_id}")
 async def virus_status(analysis_id: str, user: models.User = Depends(get_current_user)):
-    """Poll VirusTotal for analysis status. No credit charge."""
+    """Poll VirusTotal for analysis status. No credit charge. Caches completed results."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # Return from cache if already completed
+    cached = _cache_get(f"analysis:{analysis_id}")
+    if cached:
+        return {"success": True, "data": cached}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
@@ -841,7 +868,11 @@ async def virus_status(analysis_id: str, user: models.User = Depends(get_current
                 status = data_attr.get("status")
                 stats = data_attr.get("stats", {})
                 results = data_attr.get("results", {})
-                return {"success": True, "data": {"status": status, "stats": stats, "results": results}}
+                result_data = {"status": status, "stats": stats, "results": results}
+                # Only cache when completed so we don't cache in-progress state
+                if status == "completed":
+                    _cache_set(f"analysis:{analysis_id}", result_data)
+                return {"success": True, "data": result_data}
             return {"success": False, "message": f"Status check failed: {res.status_code}"}
     except Exception as e:
         return {"success": False, "message": f"Status check error: {str(e)}"}
@@ -968,4 +999,3 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
 
     except Exception as e:
         return {"success": False, "message": f"File scanning error: {str(e)}"}
-s
