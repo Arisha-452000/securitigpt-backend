@@ -801,7 +801,12 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
+            
+            target_url = req.url.strip()
+            if not target_url.startswith(("http://", "https://")):
+                target_url = "http://" + target_url
+
+            url_id = base64.urlsafe_b64encode(target_url.encode()).decode().strip("=")
 
             # 2) Fast Path: VT already has this URL cached
             res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
@@ -815,9 +820,10 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
                     return {"success": True, "message": "URL Analyzed", "data": result_data}
 
             # 3) Slow Path: submit new scan, return analysis_id for frontend polling
-            submit_res = await client.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": req.url})
+            submit_res = await client.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": target_url})
             if submit_res.status_code != 200:
-                return {"success": False, "message": f"VT Error: {submit_res.status_code}"}
+                error_detail = submit_res.json().get("error", {}).get("message", "Invalid URL or Bad Request")
+                return {"success": False, "message": f"VT Error 400: {error_detail}"}
             analysis_id = submit_res.json().get("data", {}).get("id")
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
