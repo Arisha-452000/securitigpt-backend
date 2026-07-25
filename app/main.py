@@ -968,3 +968,4 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
 
     except Exception as e:
         return {"success": False, "message": f"File scanning error: {str(e)}"}
+s
