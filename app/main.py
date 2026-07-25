@@ -780,77 +780,71 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            
-            # Fast Path: Try to get existing analysis first
             import base64
             url_id = base64.urlsafe_b64encode(req.url.encode()).decode().strip("=")
-            
-            res = await client.get(
-                f"https://www.virustotal.com/api/v3/urls/{url_id}",
-                headers=headers
-            )
-            
+
+            # Fast Path: already cached in VT — instant return
+            res = await client.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers=headers)
             if res.status_code == 200:
                 data_attr = res.json().get("data", {}).get("attributes", {})
                 stats = data_attr.get("last_analysis_stats", {})
                 results = data_attr.get("last_analysis_results", {})
-                
-                # If we have valid stats, return immediately
                 if sum(stats.values()) > 0:
                     return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
-            
-            # Slow Path: If no existing analysis, submit for a new scan
-            submit_res = await client.post(
-                "https://www.virustotal.com/api/v3/urls", 
-                headers=headers, 
-                data={"url": req.url}
-            )
-            
+
+            # Slow Path: submit new scan, return analysis_id immediately
+            submit_res = await client.post("https://www.virustotal.com/api/v3/urls", headers=headers, data={"url": req.url})
             if submit_res.status_code != 200:
                 return {"success": False, "message": f"VT Error: {submit_res.status_code}"}
-            
             analysis_id = submit_res.json().get("data", {}).get("id")
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
-            
-            # Poll for up to 20 seconds (5 attempts x 4s) — safe under Render's 30s request timeout
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=5, delay=4)
-            
-            return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
+            # Return immediately — frontend will poll /tools/virus-status/{id}
+            return {"success": True, "message": "Scan submitted", "data": {"status": "scanning", "analysis_id": analysis_id}}
     except Exception as e:
         return {"success": False, "message": f"Connection error: {str(e)}"}
 
 @app.post("/tools/virus-check")
 async def virus_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
-    """Scan file hashes or URLs using the VirusTotal API with real-time polling."""
-    # Input can be a URL or a file hash
+    """Scan file hashes or URLs. Returns instantly for cached items; returns analysis_id for new scans."""
     input_data = req.input or req.url
     if not input_data: return {"success": False, "message": "File hash or URL required"}
-    
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            
-            # Step 1: Detect if input is a hash (MD5=32, SHA1=40, SHA256=64)
-            data_id = None
-            is_url = True
-            
             if len(input_data) in [32, 40, 64]:
-                # It's a file hash - lookup is instant in VT
+                # File hash — instant lookup
                 res = await client.get(f"https://www.virustotal.com/api/v3/files/{input_data}", headers=headers)
                 if res.status_code == 200:
                     data_attr = res.json().get("data", {}).get("attributes", {})
                     stats = data_attr.get("last_analysis_stats", {})
                     results = data_attr.get("last_analysis_results", {})
                     return {"success": True, "message": "File Hash Analyzed", "data": {"stats": stats, "results": results, "status": "completed"}}
-                else:
-                    return {"success": False, "message": f"Hash not found (Error: {res.status_code})"}
+                return {"success": False, "message": f"Hash not found (Error: {res.status_code})"}
             else:
-                # It's a URL - trigger a scan and poll
+                # URL scan — delegate, will return analysis_id if new
                 return await phishing_check(req, user)
-                
     except Exception as e:
         return {"success": False, "message": f"Virus scan error: {str(e)}"}
+
+@app.get("/tools/virus-status/{analysis_id}")
+async def virus_status(analysis_id: str, user: models.User = Depends(get_current_user)):
+    """Poll VirusTotal for analysis status. No credit charge."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
+            res = await client.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}", headers=headers)
+            if res.status_code == 200:
+                data_attr = res.json().get("data", {}).get("attributes", {})
+                status = data_attr.get("status")
+                stats = data_attr.get("stats", {})
+                results = data_attr.get("results", {})
+                return {"success": True, "data": {"status": status, "stats": stats, "results": results}}
+            return {"success": False, "message": f"Status check failed: {res.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": f"Status check error: {str(e)}"}
 
 @app.post("/tools/email-check")
 async def email_check(req: ToolRequest, user: models.User = Depends(require_credits(10))):
@@ -938,20 +932,18 @@ async def get_stats_details(admin_user: models.User = Depends(get_current_user),
 
 @app.post("/tools/virus-check-file")
 async def virus_check_file(file: UploadFile = File(...), user: models.User = Depends(require_credits(20))):
-    """Securely upload a file to VirusTotal and poll for results in real-time."""
+    """Upload file to VirusTotal. Returns instantly for cached hashes; returns analysis_id for new files."""
     try:
-        # Check file size (32MB limit)
         contents = await file.read()
         if len(contents) > 32 * 1024 * 1024:
             return {"success": False, "message": "File size exceeds the 32MB limit for scanning."}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:  # 30s timeout for file upload
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
-            
             import hashlib
             file_hash = hashlib.sha256(contents).hexdigest()
-            
-            # Fast Path: Check if VT already knows this file hash
+
+            # Fast Path: VT already knows this file hash — instant return
             res = await client.get(f"https://www.virustotal.com/api/v3/files/{file_hash}", headers=headers)
             if res.status_code == 200:
                 data_attr = res.json().get("data", {}).get("attributes", {})
@@ -959,27 +951,20 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
                 results = data_attr.get("last_analysis_results", {})
                 if sum(stats.values()) > 0:
                     return {"success": True, "message": "File Hash Analyzed Instantly", "data": {"stats": stats, "results": results, "status": "completed"}}
-            
-            # Slow Path: Upload file to VT
-            files = {"file": (file.filename, contents)}
-            submit_res = await client.post(
-                "https://www.virustotal.com/api/v3/files", 
-                headers=headers, 
-                files=files
-            )
-            
+
+            # Slow Path: Upload the file to VT and return analysis_id for frontend polling
+            files_payload = {"file": (file.filename, contents)}
+            submit_res = await client.post("https://www.virustotal.com/api/v3/files", headers=headers, files=files_payload)
             if submit_res.status_code != 200:
                 error_msg = submit_res.json().get("error", {}).get("message", "Unknown VT Error")
                 return {"success": False, "message": f"VT Submission Error: {error_msg} (Status: {submit_res.status_code})"}
-            
+
             analysis_id = submit_res.json().get("data", {}).get("id")
             if not analysis_id:
                 return {"success": False, "message": "Failed to retrieve analysis ID from VirusTotal."}
-            
-            # Poll for up to 20 seconds (5 attempts x 4s) — safe under Render's 30s request timeout
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=5, delay=4)
-            
-            return {"success": True, "message": "File Analyzed", "data": {"stats": stats, "results": results, "status": status}}
+
+            # Return immediately — frontend will poll /tools/virus-status/{id}
+            return {"success": True, "message": "File uploaded, scan in progress", "data": {"status": "scanning", "analysis_id": analysis_id}}
 
     except Exception as e:
         return {"success": False, "message": f"File scanning error: {str(e)}"}
