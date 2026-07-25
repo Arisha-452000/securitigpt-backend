@@ -778,7 +778,7 @@ async def poll_vt_analysis(analysis_id: str, client: httpx.AsyncClient, headers:
 async def phishing_check(req: ToolRequest, user: models.User = Depends(require_credits(20))):
     if not req.url: return {"success": False, "message": "URL required"}
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
             # Fast Path: Try to get existing analysis first
@@ -813,8 +813,8 @@ async def phishing_check(req: ToolRequest, user: models.User = Depends(require_c
             if not analysis_id:
                 return {"success": False, "message": "Failed to get analysis ID"}
             
-            # Poll for up to 75 seconds (15 attempts x 5s) for VT to complete analysis
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=15, delay=5)
+            # Poll for up to 20 seconds (5 attempts x 4s) — safe under Render's 30s request timeout
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=5, delay=4)
             
             return {"success": True, "message": "URL Analyzed", "data": {"stats": stats, "results": results, "status": status}}
     except Exception as e:
@@ -945,7 +945,7 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
         if len(contents) > 32 * 1024 * 1024:
             return {"success": False, "message": "File size exceeds the 32MB limit for scanning."}
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             headers = {"x-apikey": config.VIRUSTOTAL_API_KEY}
             
             import hashlib
@@ -976,8 +976,8 @@ async def virus_check_file(file: UploadFile = File(...), user: models.User = Dep
             if not analysis_id:
                 return {"success": False, "message": "Failed to retrieve analysis ID from VirusTotal."}
             
-            # Poll for up to 75 seconds (15 attempts x 5s) for VT to complete analysis
-            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=15, delay=5)
+            # Poll for up to 20 seconds (5 attempts x 4s) — safe under Render's 30s request timeout
+            stats, results, status = await poll_vt_analysis(analysis_id, client, headers, max_attempts=5, delay=4)
             
             return {"success": True, "message": "File Analyzed", "data": {"stats": stats, "results": results, "status": status}}
 
