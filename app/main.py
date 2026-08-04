@@ -47,12 +47,15 @@ app.add_middleware(
         "http://securitigpt.com",
         "http://www.securitigpt.com",
         "http://localhost:5500",  # For local testing
-        "http://127.0.0.1:5500"   # For local testing
+        "http://127.0.0.1:5500",   # For local testing
+        "http://localhost:3000",  # For local testing
+        "http://127.0.0.1:3000",   # For local testing
+        "*"  # Allow all origins for debugging
     ],
-    allow_origin_regex="https://.*",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 @app.on_event("startup")
