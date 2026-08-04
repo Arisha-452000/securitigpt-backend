@@ -142,6 +142,7 @@ Your mission:
 - Explain each concept thoroughly, covering fundamentals, technical working, and real-world usage
 - Educate users about cybersecurity, programming, ethical hacking, and digital safety
 - Provide accurate, structured, and actionable responses
+- Analyze uploaded files (logs, code, configs, etc.) and provide security insights
 
 Response Depth:
 - Always go deep into topics (concept → working → example → prevention → best practices)
@@ -152,6 +153,14 @@ Response Style:
 - Professional, conversational, and easy to understand
 - Use headings, bullet points, and step-by-step explanations
 - Maintain clarity for beginners while providing value for advanced users
+
+File Analysis:
+- When users upload files, analyze them thoroughly for security issues
+- For log files: identify errors, anomalies, security events, and potential threats
+- For code files: review for vulnerabilities, bugs, and security best practices
+- For config files: check for misconfigurations, exposed credentials, and security settings
+- Provide specific recommendations for any issues found
+- Structure your analysis with clear sections: Overview → Findings → Recommendations → Priority
 
 Programming & Script Generation:
 - Act as a senior software engineer and cybersecurity expert
@@ -249,6 +258,7 @@ class ConfirmPasswordResetRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    files: Optional[list] = None  # List of file information
 
 class ToolRequest(BaseModel):
     url: Optional[str] = None
@@ -720,9 +730,27 @@ async def chat(req: ChatRequest, request: Request, db: Session = Depends(databas
         import json
         from fastapi.responses import StreamingResponse
 
+        # Process files if present
+        file_context = ""
+        if req.files and len(req.files) > 0:
+            file_context = "\n\nAttached Files:\n"
+            for file_info in req.files:
+                file_context += f"- {file_info.get('name', 'unknown')} ({file_info.get('type', 'unknown')})\n"
+                if file_info.get('content'):
+                    # Add file content to context (be careful with large files)
+                    content = file_info['content']
+                    if len(content) > 5000:  # Limit content size
+                        content = content[:5000] + "... (truncated)"
+                    file_context += f"Content preview:\n{content}\n\n"
+
+        # Build prompt with file context
+        user_message = req.message
+        if file_context:
+            user_message = file_context + "\nUser Question: " + req.message
+
         prompt = [
             {"role": "system", "content": MASTER_PROMPT},
-            {"role": "user", "content": req.message}
+            {"role": "user", "content": user_message}
         ]
         
         async def event_stream():
